@@ -45,6 +45,8 @@ pub(crate) fn group_to_curve_oid(
         openssl::nid::Nid::BRAINPOOL_P384R1 => Some(cryptography_x509::oid::EC_BRAINPOOLP384R1),
         #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
         openssl::nid::Nid::BRAINPOOL_P512R1 => Some(cryptography_x509::oid::EC_BRAINPOOLP512R1),
+        #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+        openssl::nid::Nid::SM2 => Some(cryptography_x509::oid::EC_SM2P256V1),
         _ => None,
     }
 }
@@ -82,6 +84,9 @@ pub(crate) fn ec_params_to_group(
                 &cryptography_x509::oid::EC_BRAINPOOLP384R1 => openssl::nid::Nid::BRAINPOOL_P384R1,
                 #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
                 &cryptography_x509::oid::EC_BRAINPOOLP512R1 => openssl::nid::Nid::BRAINPOOL_P512R1,
+
+                #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+                &cryptography_x509::oid::EC_SM2P256V1 => openssl::nid::Nid::SM2,
 
                 _ => return Err(KeyParsingError::UnsupportedEllipticCurve(curve_oid.clone())),
             };

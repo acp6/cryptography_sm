@@ -67,6 +67,9 @@ fn curve_from_py_curve(
         #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
         "brainpoolP512r1" => openssl::nid::Nid::BRAINPOOL_P512R1,
 
+        #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+        "sm2" => openssl::nid::Nid::SM2,
+
         curve_name => {
             return Err(CryptographyError::from(
                 exceptions::UnsupportedAlgorithm::new_err((

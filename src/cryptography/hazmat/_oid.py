@@ -122,6 +122,7 @@ class SignatureAlgorithmOID:
     GOSTR3411_94_WITH_3410_2001 = ObjectIdentifier("1.2.643.2.2.3")
     GOSTR3410_2012_WITH_3411_2012_256 = ObjectIdentifier("1.2.643.7.1.1.3.2")
     GOSTR3410_2012_WITH_3411_2012_512 = ObjectIdentifier("1.2.643.7.1.1.3.3")
+    SM2_WITH_SM3 = ObjectIdentifier("1.2.156.10197.1.501")
 
 
 _SIG_OIDS_TO_HASH: dict[ObjectIdentifier, hashes.HashAlgorithm | None] = {
@@ -153,6 +154,7 @@ _SIG_OIDS_TO_HASH: dict[ObjectIdentifier, hashes.HashAlgorithm | None] = {
     SignatureAlgorithmOID.GOSTR3411_94_WITH_3410_2001: None,
     SignatureAlgorithmOID.GOSTR3410_2012_WITH_3411_2012_256: None,
     SignatureAlgorithmOID.GOSTR3410_2012_WITH_3411_2012_512: None,
+    SignatureAlgorithmOID.SM2_WITH_SM3: hashes.SM3(),
 }
 
 
@@ -170,6 +172,7 @@ class HashAlgorithmOID:
     SHA3_256_NIST = ObjectIdentifier("2.16.840.1.101.3.4.2.8")
     SHA3_384_NIST = ObjectIdentifier("2.16.840.1.101.3.4.2.9")
     SHA3_512_NIST = ObjectIdentifier("2.16.840.1.101.3.4.2.10")
+    SM3 = ObjectIdentifier("1.2.156.10197.1.401")
 
 
 class PublicKeyAlgorithmOID:
@@ -285,6 +288,7 @@ _OID_NAMES = {
     SignatureAlgorithmOID.GOSTR3410_2012_WITH_3411_2012_512: (
         "GOST R 34.10-2012 with GOST R 34.11-2012 (512 bit)"
     ),
+    SignatureAlgorithmOID.SM2_WITH_SM3: "sm2WithSM3",
     HashAlgorithmOID.SHA1: "sha1",
     HashAlgorithmOID.SHA224: "sha224",
     HashAlgorithmOID.SHA256: "sha256",
@@ -298,6 +302,7 @@ _OID_NAMES = {
     HashAlgorithmOID.SHA3_256_NIST: "sha3_256",
     HashAlgorithmOID.SHA3_384_NIST: "sha3_384",
     HashAlgorithmOID.SHA3_512_NIST: "sha3_512",
+    HashAlgorithmOID.SM3: "sm3",
     PublicKeyAlgorithmOID.DSA: "dsaEncryption",
     PublicKeyAlgorithmOID.EC_PUBLIC_KEY: "id-ecPublicKey",
     PublicKeyAlgorithmOID.RSAES_PKCS1_v1_5: "rsaEncryption",

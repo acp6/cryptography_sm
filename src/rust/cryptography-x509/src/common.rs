@@ -48,6 +48,10 @@ pub enum AlgorithmParameters<'a> {
     #[defined_by(oid::SHA3_512_NIST_OID)]
     Sha3_512Nist(Option<asn1::Null>),
 
+    // SM3 hash algorithm (GM/T 0004)
+    #[defined_by(oid::SM3_OID)]
+    Sm3(Option<asn1::Null>),
+
     #[defined_by(oid::ED25519_OID)]
     Ed25519,
     #[defined_by(oid::ED448_OID)]
@@ -86,6 +90,10 @@ pub enum AlgorithmParameters<'a> {
     EcDsaWithSha3_384,
     #[defined_by(oid::ECDSA_WITH_SHA3_512_OID)]
     EcDsaWithSha3_512,
+
+    // SM2 with SM3 signature algorithm (GM/T 0003)
+    #[defined_by(oid::SM2_WITH_SM3_OID)]
+    Sm2WithSm3(Option<asn1::Null>),
 
     #[defined_by(oid::RSA_WITH_SHA1_OID)]
     RsaWithSha1(Option<asn1::Null>),

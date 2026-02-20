@@ -357,6 +357,18 @@ pub fn serialize_private_key(
                 pkcs1_der,
             )
         }
+        #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+        openssl::pkey::Id::SM2 => {
+            let ec = pkey.ec_key()?;
+            let curve_oid = ec::group_to_curve_oid(ec.group()).expect("Unknown curve");
+            let pkcs1_der = ec::serialize_pkcs1_private_key(&ec, false)?;
+            (
+                AlgorithmParameters::Ec(cryptography_x509::common::EcParameters::NamedCurve(
+                    curve_oid,
+                )),
+                pkcs1_der,
+            )
+        }
         openssl::pkey::Id::ED25519 => {
             let raw_bytes = pkey.raw_private_key()?;
             let private_key_der = asn1::write_single(&raw_bytes.as_slice())?;

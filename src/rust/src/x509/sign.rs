@@ -30,6 +30,7 @@ static HASH_OIDS_TO_HASH: LazyLock<HashMap<&asn1::ObjectIdentifier, &str>> = Laz
     h.insert(&oid::SHA3_256_NIST_OID, "SHA3_256");
     h.insert(&oid::SHA3_384_NIST_OID, "SHA3_384");
     h.insert(&oid::SHA3_512_NIST_OID, "SHA3_512");
+    h.insert(&oid::SM3_OID, "SM3");
     h
 });
 
@@ -52,6 +53,7 @@ enum HashType {
     Sha3_256,
     Sha3_384,
     Sha3_512,
+    Sm3,
 }
 
 pub(crate) fn identify_key_type(
@@ -101,6 +103,7 @@ fn identify_hash_type(
         "sha3-256" => Ok(HashType::Sha3_256),
         "sha3-384" => Ok(HashType::Sha3_384),
         "sha3-512" => Ok(HashType::Sha3_512),
+        "sm3" => Ok(HashType::Sm3),
         name => Err(exceptions::UnsupportedAlgorithm::new_err(format!(
             "Hash algorithm {name:?} not supported for signatures"
         ))),
@@ -222,6 +225,10 @@ pub(crate) fn compute_signature_algorithm<'p>(
             oid: asn1::DefinedByMarker::marker(),
             params: common::AlgorithmParameters::EcDsaWithSha3_512,
         }),
+        (KeyType::Ec, HashType::Sm3) => Ok(common::AlgorithmIdentifier {
+            oid: asn1::DefinedByMarker::marker(),
+            params: common::AlgorithmParameters::Sm2WithSm3(None),
+        }),
 
         (KeyType::Rsa, HashType::Sha224) => Ok(common::AlgorithmIdentifier {
             oid: asn1::DefinedByMarker::marker(),
@@ -278,6 +285,11 @@ pub(crate) fn compute_signature_algorithm<'p>(
         ) => Err(exceptions::UnsupportedAlgorithm::new_err(
             "SHA3 hashes are not supported with DSA keys",
         )),
+        (KeyType::Rsa | KeyType::Dsa, HashType::Sm3) => {
+            Err(exceptions::UnsupportedAlgorithm::new_err(
+                "SM3 hash is not supported with RSA or DSA keys",
+            ))
+        }
         (_, HashType::None) => Err(pyo3::exceptions::PyTypeError::new_err(
             "Algorithm must be a registered hash algorithm, not None.",
         )),
@@ -403,7 +415,8 @@ fn identify_key_type_for_algorithm_params(
         | common::AlgorithmParameters::EcDsaWithSha3_224
         | common::AlgorithmParameters::EcDsaWithSha3_256
         | common::AlgorithmParameters::EcDsaWithSha3_384
-        | common::AlgorithmParameters::EcDsaWithSha3_512 => Ok(KeyType::Ec),
+        | common::AlgorithmParameters::EcDsaWithSha3_512
+        | common::AlgorithmParameters::Sm2WithSm3(..) => Ok(KeyType::Ec),
         common::AlgorithmParameters::Ed25519 => Ok(KeyType::Ed25519),
         common::AlgorithmParameters::Ed448 => Ok(KeyType::Ed448),
         common::AlgorithmParameters::DsaWithSha224(..)
@@ -428,6 +441,7 @@ fn identify_alg_params_for_hash_type(
         HashType::Sha3_256 => Ok(common::AlgorithmParameters::Sha3_256Nist(Some(()))),
         HashType::Sha3_384 => Ok(common::AlgorithmParameters::Sha3_384Nist(Some(()))),
         HashType::Sha3_512 => Ok(common::AlgorithmParameters::Sha3_512Nist(Some(()))),
+        HashType::Sm3 => Ok(common::AlgorithmParameters::Sm3(Some(()))),
         HashType::None => Err(pyo3::exceptions::PyTypeError::new_err(
             "Algorithm must be a registered hash algorithm, not None.",
         )),
@@ -518,7 +532,8 @@ pub(crate) fn identify_signature_algorithm_parameters<'p>(
         | common::AlgorithmParameters::EcDsaWithSha3_224
         | common::AlgorithmParameters::EcDsaWithSha3_256
         | common::AlgorithmParameters::EcDsaWithSha3_384
-        | common::AlgorithmParameters::EcDsaWithSha3_512 => {
+        | common::AlgorithmParameters::EcDsaWithSha3_512
+        | common::AlgorithmParameters::Sm2WithSm3(_) => {
             let signature_hash_algorithm =
                 identify_signature_hash_algorithm(py, signature_algorithm)?;
 

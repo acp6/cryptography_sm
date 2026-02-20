@@ -136,6 +136,23 @@ pub fn serialize_public_key(
                 point_bytes,
             )
         }
+        #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+        openssl::pkey::Id::SM2 => {
+            let ec = pkey.ec_key()?;
+            let curve_oid = crate::ec::group_to_curve_oid(ec.group()).expect("Unknown curve");
+
+            let mut bn_ctx = openssl::bn::BigNumContext::new()?;
+            let point_bytes = ec.public_key().to_bytes(
+                ec.group(),
+                openssl::ec::PointConversionForm::UNCOMPRESSED,
+                &mut bn_ctx,
+            )?;
+
+            (
+                AlgorithmParameters::Ec(EcParameters::NamedCurve(curve_oid)),
+                point_bytes,
+            )
+        }
         openssl::pkey::Id::ED25519 => {
             let raw_bytes = pkey.raw_public_key()?;
             (AlgorithmParameters::Ed25519, raw_bytes)

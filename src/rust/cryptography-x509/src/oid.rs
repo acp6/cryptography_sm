@@ -75,6 +75,9 @@ pub const EC_BRAINPOOLP256R1: asn1::ObjectIdentifier = asn1::oid!(1, 3, 36, 3, 3
 pub const EC_BRAINPOOLP384R1: asn1::ObjectIdentifier = asn1::oid!(1, 3, 36, 3, 3, 2, 8, 1, 1, 11);
 pub const EC_BRAINPOOLP512R1: asn1::ObjectIdentifier = asn1::oid!(1, 3, 36, 3, 3, 2, 8, 1, 1, 13);
 
+// SM2 curve OID (GM/T 0003)
+pub const EC_SM2P256V1: asn1::ObjectIdentifier = asn1::oid!(1, 2, 156, 10197, 1, 301);
+
 pub const RSA_OID: asn1::ObjectIdentifier = asn1::oid!(1, 2, 840, 113549, 1, 1, 1);
 
 // Signing methods
@@ -90,6 +93,9 @@ pub const ECDSA_WITH_SHA3_384_OID: asn1::ObjectIdentifier =
     asn1::oid!(2, 16, 840, 1, 101, 3, 4, 3, 11);
 pub const ECDSA_WITH_SHA3_512_OID: asn1::ObjectIdentifier =
     asn1::oid!(2, 16, 840, 1, 101, 3, 4, 3, 12);
+
+// SM2 signature algorithm (SM2withSM3, GM/T 0003)
+pub const SM2_WITH_SM3_OID: asn1::ObjectIdentifier = asn1::oid!(1, 2, 156, 10197, 1, 501);
 
 pub const RSA_WITH_SHA1_OID: asn1::ObjectIdentifier = asn1::oid!(1, 2, 840, 113549, 1, 1, 5);
 pub const RSA_WITH_SHA1_ALT_OID: asn1::ObjectIdentifier = asn1::oid!(1, 3, 14, 3, 2, 29);
@@ -141,6 +147,9 @@ pub const SHA3_224_NIST_OID: asn1::ObjectIdentifier = asn1::oid!(2, 16, 840, 1, 
 pub const SHA3_256_NIST_OID: asn1::ObjectIdentifier = asn1::oid!(2, 16, 840, 1, 101, 3, 4, 2, 8);
 pub const SHA3_384_NIST_OID: asn1::ObjectIdentifier = asn1::oid!(2, 16, 840, 1, 101, 3, 4, 2, 9);
 pub const SHA3_512_NIST_OID: asn1::ObjectIdentifier = asn1::oid!(2, 16, 840, 1, 101, 3, 4, 2, 10);
+
+// SM3 hash algorithm OID (GM/T 0004)
+pub const SM3_OID: asn1::ObjectIdentifier = asn1::oid!(1, 2, 156, 10197, 1, 401);
 
 pub const MGF1_OID: asn1::ObjectIdentifier = asn1::oid!(1, 2, 840, 113549, 1, 1, 8);
 pub const RSASSA_PSS_OID: asn1::ObjectIdentifier = asn1::oid!(1, 2, 840, 113549, 1, 1, 10);
