@@ -5,12 +5,27 @@
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
+#[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+use foreign_types_shared::ForeignType;
 use pyo3::types::PyAnyMethods;
 
 use crate::backend::utils;
 use crate::buf::CffiBuf;
 use crate::error::{CryptographyError, CryptographyResult};
 use crate::{exceptions, types};
+
+// SM2 default user ID per GM/T 0009
+#[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+const SM2_DEFAULT_ID: &[u8] = b"1234567812345678";
+
+#[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+extern "C" {
+    fn EVP_PKEY_CTX_set1_id(
+        ctx: *mut openssl_sys::EVP_PKEY_CTX,
+        id: *const std::ffi::c_void,
+        id_len: std::os::raw::c_int,
+    ) -> std::os::raw::c_int;
+}
 
 #[pyo3::pyclass(frozen, module = "cryptography.hazmat.bindings._rust.openssl.ec")]
 pub(crate) struct ECPrivateKey {
@@ -274,6 +289,27 @@ impl ECPrivateKey {
             ));
         }
         let bound_algorithm = signature_algorithm.getattr(pyo3::intern!(py, "algorithm"))?;
+
+        // For SM2 keys (non-Prehashed), use raw EVP_DigestSign with SM2 distid
+        // so OpenSSL performs GM/T 0003 Z-value preprocessing internally.
+        #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+        {
+            let curve_name = self.curve.bind(py).getattr(pyo3::intern!(py, "name"))?
+                .extract::<pyo3::pybacked::PyBackedStr>()?;
+            if &*curve_name == "sm2"
+                && !bound_algorithm.is_instance(&types::PREHASHED.get(py)?)?
+            {
+                let md = crate::backend::hashes::message_digest_from_algorithm(
+                    py,
+                    &bound_algorithm,
+                )?;
+                let sig = unsafe {
+                    sm2_evp_digest_sign(&self.pkey, &md, data.as_bytes())?
+                };
+                return Ok(pyo3::types::PyBytes::new(py, &sig));
+            }
+        }
+
         let (data, algo) =
             utils::calculate_digest_and_algorithm(py, data.as_bytes(), &bound_algorithm)?;
 
@@ -418,10 +454,43 @@ impl ECPublicKey {
             ));
         }
 
+        let bound_algorithm =
+            signature_algorithm.getattr(pyo3::intern!(py, "algorithm"))?;
+
+        // For SM2 keys (non-Prehashed), use raw EVP_DigestVerify with SM2 distid
+        // so OpenSSL performs GM/T 0003 Z-value preprocessing internally.
+        #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+        {
+            let curve_name = self.curve.bind(py).getattr(pyo3::intern!(py, "name"))?
+                .extract::<pyo3::pybacked::PyBackedStr>()?;
+            if &*curve_name == "sm2"
+                && !bound_algorithm.is_instance(&types::PREHASHED.get(py)?)?
+            {
+                let md = crate::backend::hashes::message_digest_from_algorithm(
+                    py,
+                    &bound_algorithm,
+                )?;
+                let valid = unsafe {
+                    sm2_evp_digest_verify(
+                        &self.pkey,
+                        &md,
+                        signature.as_bytes(),
+                        data.as_bytes(),
+                    )?
+                };
+                if !valid {
+                    return Err(CryptographyError::from(
+                        exceptions::InvalidSignature::new_err(()),
+                    ));
+                }
+                return Ok(());
+            }
+        }
+
         let (data, _) = utils::calculate_digest_and_algorithm(
             py,
             data.as_bytes(),
-            &signature_algorithm.getattr(pyo3::intern!(py, "algorithm"))?,
+            &bound_algorithm,
         )?;
 
         let mut verifier = openssl::pkey_ctx::PkeyCtx::new(&self.pkey)?;
@@ -692,6 +761,150 @@ impl EllipticCurvePublicNumbers {
             format_args!("<EllipticCurvePublicNumbers(curve={curve_name}, x={x}, y={y})>"),
         )
     }
+}
+
+/// Raw EVP_DigestSign for SM2 with distid set per GM/T 0009.
+#[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+unsafe fn sm2_evp_digest_sign(
+    pkey: &openssl::pkey::PKey<openssl::pkey::Private>,
+    md: &openssl::hash::MessageDigest,
+    data: &[u8],
+) -> CryptographyResult<Vec<u8>> {
+    let md_ctx = openssl_sys::EVP_MD_CTX_new();
+    if md_ctx.is_null() {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+    // RAII guard to free EVP_MD_CTX on all exit paths
+    struct MdCtxGuard(*mut openssl_sys::EVP_MD_CTX);
+    impl Drop for MdCtxGuard {
+        fn drop(&mut self) {
+            unsafe { openssl_sys::EVP_MD_CTX_free(self.0); }
+        }
+    }
+    let _guard = MdCtxGuard(md_ctx);
+
+    let mut pctx: *mut openssl_sys::EVP_PKEY_CTX = std::ptr::null_mut();
+    if openssl_sys::EVP_DigestSignInit(
+        md_ctx,
+        &mut pctx,
+        md.as_ptr(),
+        std::ptr::null_mut(),
+        pkey.as_ptr(),
+    ) != 1
+    {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+
+    // Set SM2 user ID (distid) per GM/T 0009
+    if EVP_PKEY_CTX_set1_id(
+        pctx,
+        SM2_DEFAULT_ID.as_ptr() as *const std::ffi::c_void,
+        SM2_DEFAULT_ID.len() as std::os::raw::c_int,
+    ) != 1
+    {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+
+    // Query maximum signature length
+    let mut sig_len: usize = 0;
+    if openssl_sys::EVP_DigestSign(
+        md_ctx,
+        std::ptr::null_mut(),
+        &mut sig_len,
+        data.as_ptr(),
+        data.len(),
+    ) != 1
+    {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+
+    // Produce the actual signature
+    let mut sig = vec![0u8; sig_len];
+    if openssl_sys::EVP_DigestSign(
+        md_ctx,
+        sig.as_mut_ptr(),
+        &mut sig_len,
+        data.as_ptr(),
+        data.len(),
+    ) != 1
+    {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+    sig.truncate(sig_len);
+    Ok(sig)
+}
+
+/// Raw EVP_DigestVerify for SM2 with distid set per GM/T 0009.
+#[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+unsafe fn sm2_evp_digest_verify(
+    pkey: &openssl::pkey::PKey<openssl::pkey::Public>,
+    md: &openssl::hash::MessageDigest,
+    signature: &[u8],
+    data: &[u8],
+) -> CryptographyResult<bool> {
+    let md_ctx = openssl_sys::EVP_MD_CTX_new();
+    if md_ctx.is_null() {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+    struct MdCtxGuard(*mut openssl_sys::EVP_MD_CTX);
+    impl Drop for MdCtxGuard {
+        fn drop(&mut self) {
+            unsafe { openssl_sys::EVP_MD_CTX_free(self.0); }
+        }
+    }
+    let _guard = MdCtxGuard(md_ctx);
+
+    let mut pctx: *mut openssl_sys::EVP_PKEY_CTX = std::ptr::null_mut();
+    if openssl_sys::EVP_DigestVerifyInit(
+        md_ctx,
+        &mut pctx,
+        md.as_ptr(),
+        std::ptr::null_mut(),
+        pkey.as_ptr(),
+    ) != 1
+    {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+
+    // Set SM2 user ID (distid) per GM/T 0009
+    if EVP_PKEY_CTX_set1_id(
+        pctx,
+        SM2_DEFAULT_ID.as_ptr() as *const std::ffi::c_void,
+        SM2_DEFAULT_ID.len() as std::os::raw::c_int,
+    ) != 1
+    {
+        return Err(CryptographyError::from(
+            openssl::error::ErrorStack::get(),
+        ));
+    }
+
+    let ret = openssl_sys::EVP_DigestVerify(
+        md_ctx,
+        signature.as_ptr(),
+        signature.len(),
+        data.as_ptr(),
+        data.len(),
+    );
+    if ret != 1 {
+        // Consume any OpenSSL errors from the failed verification
+        // to keep the error stack clean.
+        let _ = openssl::error::ErrorStack::get();
+    }
+    Ok(ret == 1)
 }
 
 #[pyo3::pymodule(gil_used = false)]
