@@ -28,6 +28,7 @@ private key is able to decrypt it.
     ed448
     x448
     ec
+    sm2
     rsa
     dh
     dsa

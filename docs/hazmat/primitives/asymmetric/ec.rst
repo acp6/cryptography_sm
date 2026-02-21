@@ -395,6 +395,17 @@ All named curves are instances of :class:`EllipticCurve`.
     Brainpool curve specified in :rfc:`5639`. These curves are discouraged
     for new systems.
 
+.. class:: SM2
+
+    SM2 elliptic curve defined in the Chinese national standard `GM/T 0003`_.
+    This 256-bit curve is mandated for use in Chinese commercial cryptography
+    applications. SM2 keys use a different OpenSSL key type than standard EC
+    keys, and signing with SM2 automatically applies the Z-value preprocessing
+    required by the GM/T 0003 standard. Requires OpenSSL 1.1.1+.
+
+    See :doc:`sm2` for detailed usage, including X.509 certificates, CRL, and
+    OCSP with SM2.
+
 .. class:: SECT571K1
 
     .. versionadded:: 0.5
@@ -832,6 +843,10 @@ Elliptic Curve Object Identifiers
 
         Corresponds to the dotted string ``"1.3.36.3.3.2.8.1.1.13"``.
 
+    .. attribute:: SM2P256V1
+
+        Corresponds to the dotted string ``"1.2.156.10197.1.301"``.
+
     .. attribute:: SECT163K1
 
         .. versionadded:: 2.5
@@ -920,3 +935,4 @@ Elliptic Curve Object Identifiers
 .. _`forward secrecy`: https://en.wikipedia.org/wiki/Forward_secrecy
 .. _`SEC 1 v2.0`: https://www.secg.org/sec1-v2.pdf
 .. _`bad cryptographic practice`: https://crypto.stackexchange.com/a/3313
+.. _`GM/T 0003`: https://www.oscca.gov.cn/sca/xxgk/2010-12/17/content_1002386.shtml
