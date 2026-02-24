@@ -625,6 +625,10 @@ mod tests {
                 &common::AlgorithmParameters::DsaWithSha512(None),
                 KeyType::Dsa,
             ),
+            (
+                &common::AlgorithmParameters::Sm2WithSm3(None),
+                KeyType::Ec,
+            ),
         ] {
             assert_eq!(
                 identify_key_type_for_algorithm_params(params).unwrap(),
@@ -674,6 +678,10 @@ mod tests {
             (
                 HashType::Sha3_512,
                 common::AlgorithmParameters::Sha3_512Nist(Some(())),
+            ),
+            (
+                HashType::Sm3,
+                common::AlgorithmParameters::Sm3(Some(())),
             ),
         ] {
             assert_eq!(identify_alg_params_for_hash_type(hash).unwrap(), params);

@@ -36,13 +36,14 @@ _ALLOWED_HASHES = (
     hashes.SHA256,
     hashes.SHA384,
     hashes.SHA512,
+    hashes.SM3,
 )
 
 
 def _verify_algorithm(algorithm: hashes.HashAlgorithm) -> None:
     if not isinstance(algorithm, _ALLOWED_HASHES):
         raise ValueError(
-            "Algorithm must be SHA1, SHA224, SHA256, SHA384, or SHA512"
+            "Algorithm must be SHA1, SHA224, SHA256, SHA384, SHA512, or SM3"
         )
 
 

@@ -47,6 +47,7 @@ _AllowedHashTypes = typing.Union[
     hashes.SHA3_256,
     hashes.SHA3_384,
     hashes.SHA3_512,
+    hashes.SM3,
 ]
 
 
