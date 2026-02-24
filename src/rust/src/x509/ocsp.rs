@@ -27,6 +27,8 @@ pub(crate) static ALGORITHM_PARAMETERS_TO_HASH: LazyLock<
     h.insert(common::AlgorithmParameters::Sha384(Some(())), "SHA384");
     h.insert(common::AlgorithmParameters::Sha512(None), "SHA512");
     h.insert(common::AlgorithmParameters::Sha512(Some(())), "SHA512");
+    h.insert(common::AlgorithmParameters::Sm3(None), "SM3");
+    h.insert(common::AlgorithmParameters::Sm3(Some(())), "SM3");
     h
 });
 
@@ -67,6 +69,13 @@ pub(crate) static HASH_NAME_TO_ALGORITHM_IDENTIFIERS: LazyLock<
         common::AlgorithmIdentifier {
             oid: asn1::DefinedByMarker::marker(),
             params: common::AlgorithmParameters::Sha512(Some(())),
+        },
+    );
+    h.insert(
+        "sm3",
+        common::AlgorithmIdentifier {
+            oid: asn1::DefinedByMarker::marker(),
+            params: common::AlgorithmParameters::Sm3(Some(())),
         },
     );
     h

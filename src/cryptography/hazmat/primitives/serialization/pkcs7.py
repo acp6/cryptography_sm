@@ -33,6 +33,7 @@ PKCS7HashTypes = typing.Union[
     hashes.SHA256,
     hashes.SHA384,
     hashes.SHA512,
+    hashes.SM3,
 ]
 
 PKCS7PrivateKeyTypes = typing.Union[
@@ -93,11 +94,12 @@ class PKCS7SignatureBuilder:
                 hashes.SHA256,
                 hashes.SHA384,
                 hashes.SHA512,
+                hashes.SM3,
             ),
         ):
             raise TypeError(
                 "hash_algorithm must be one of hashes.SHA224, "
-                "SHA256, SHA384, or SHA512"
+                "SHA256, SHA384, SHA512, or SM3"
             )
         if not isinstance(certificate, x509.Certificate):
             raise TypeError("certificate must be a x509.Certificate")

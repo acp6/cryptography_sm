@@ -4,6 +4,7 @@
 
 
 import contextlib
+import datetime
 import email.parser
 import os
 import typing
@@ -20,7 +21,7 @@ from cryptography.hazmat.bindings._rust import (
     test_support,
 )
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import ed25519, padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa
 from cryptography.hazmat.primitives.ciphers import algorithms
 from cryptography.hazmat.primitives.serialization import pkcs7
 from tests.x509.test_x509 import _generate_ca_and_leaf
@@ -1513,6 +1514,268 @@ class TestPKCS7SerializeCerts:
                 certs,
                 "not an encoding",  # type: ignore[arg-type]
             )
+
+
+def _generate_sm2_cert_key():
+    """Generate a self-signed SM2 certificate and private key for testing."""
+    key = ec.generate_private_key(ec.SM2())
+    subject = issuer = x509.Name([
+        x509.NameAttribute(x509.oid.NameOID.COUNTRY_NAME, "CN"),
+        x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "SM2 PKCS7 Test"),
+    ])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime(2020, 1, 1))
+        .not_valid_after(datetime.datetime(2040, 1, 1))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=None),
+            critical=True,
+        )
+        .sign(key, hashes.SM3())
+    )
+    return cert, key
+
+
+@pytest.mark.supported(
+    only_if=lambda backend: (
+        not (
+            rust_openssl.CRYPTOGRAPHY_IS_AWSLC
+            or rust_openssl.CRYPTOGRAPHY_IS_BORINGSSL
+        )
+        and backend.elliptic_curve_supported(ec.SM2())
+    ),
+    skip_message="Requires OpenSSL with PKCS7 and SM2 support",
+)
+class TestPKCS7SM2SignatureBuilder:
+    def test_sign_der(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options: typing.List[pkcs7.PKCS7Options] = []
+        sig = builder.sign(serialization.Encoding.DER, options)
+        # SM2WithSM3 OID: 1.2.156.10197.1.501
+        assert b"\x06\x08\x2a\x81\x1c\xcf\x55\x01\x83\x75" in sig
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER, sig, None, [cert], options
+        )
+
+    def test_sign_pem(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options: typing.List[pkcs7.PKCS7Options] = []
+        sig = builder.sign(serialization.Encoding.PEM, options)
+        test_support.pkcs7_verify(
+            serialization.Encoding.PEM, sig, None, [cert], options
+        )
+
+    def test_sign_detached(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        options = [pkcs7.PKCS7Options.DetachedSignature]
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+
+        sig_smime = builder.sign(serialization.Encoding.SMIME, options)
+        assert b"sm3" in sig_smime
+        # Parse the message to get the signed data
+        message = email.parser.BytesParser().parsebytes(sig_smime)
+        payload = message.get_payload()
+        assert isinstance(payload, list)
+        assert isinstance(payload[0], Message)
+        signed_data = payload[0].get_payload()
+        assert isinstance(signed_data, str)
+        test_support.pkcs7_verify(
+            serialization.Encoding.SMIME,
+            sig_smime,
+            signed_data.encode(),
+            [cert],
+            options,
+        )
+
+        sig_der = builder.sign(serialization.Encoding.DER, options)
+        assert data not in sig_der
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER,
+            sig_der,
+            data,
+            [cert],
+            options,
+        )
+
+    def test_sign_attached(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        options: typing.List[pkcs7.PKCS7Options] = []
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        sig = builder.sign(serialization.Encoding.DER, options)
+        assert data in sig
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER, sig, None, [cert], options
+        )
+
+    def test_sign_binary(self, backend):
+        data = b"hello\nworld"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options: typing.List[pkcs7.PKCS7Options] = []
+        sig_no_binary = builder.sign(serialization.Encoding.DER, options)
+        sig_binary = builder.sign(
+            serialization.Encoding.DER, [pkcs7.PKCS7Options.Binary]
+        )
+        # Binary prevents LF -> CR+LF translation
+        assert data not in sig_no_binary
+        assert data in sig_binary
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER, sig_no_binary, None, [cert], options
+        )
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER, sig_binary, None, [cert], options
+        )
+
+    def test_sign_no_attributes(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options = [pkcs7.PKCS7Options.NoAttributes]
+        sig = builder.sign(serialization.Encoding.DER, options)
+        # No SMIMECapabilities OID
+        assert b"\x06\t*\x86H\x86\xf7\r\x01\t\x0f" not in sig
+        # No signingTime OID
+        assert b"\x06\t*\x86H\x86\xf7\r\x01\t\x05" not in sig
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER, sig, None, [cert], options
+        )
+
+    def test_sign_no_capabilities(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options = [pkcs7.PKCS7Options.NoCapabilities]
+        sig = builder.sign(serialization.Encoding.DER, options)
+        # No SMIMECapabilities OID
+        assert b"\x06\t*\x86H\x86\xf7\r\x01\t\x0f" not in sig
+        # signingTime OID should still be present
+        assert b"\x06\t*\x86H\x86\xf7\r\x01\t\x05" in sig
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER, sig, None, [cert], options
+        )
+
+    def test_sign_no_certs(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options: typing.List[pkcs7.PKCS7Options] = []
+        sig = builder.sign(serialization.Encoding.DER, options)
+        assert sig.count(cert.public_bytes(serialization.Encoding.DER)) == 1
+
+        options_no_certs = [pkcs7.PKCS7Options.NoCerts]
+        sig_no = builder.sign(serialization.Encoding.DER, options_no_certs)
+        assert sig_no.count(
+            cert.public_bytes(serialization.Encoding.DER)
+        ) == 0
+
+    def test_sign_text(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options = [
+            pkcs7.PKCS7Options.Text,
+            pkcs7.PKCS7Options.DetachedSignature,
+        ]
+        sig = builder.sign(serialization.Encoding.SMIME, options)
+        assert sig.count(b"text/plain") == 1
+        # Parse the message to get the signed data
+        message = email.parser.BytesParser().parsebytes(sig)
+        payload = message.get_payload()
+        assert isinstance(payload, list)
+        assert isinstance(payload[0], Message)
+        signed_data = payload[0].as_bytes(
+            policy=message.policy.clone(linesep="\r\n")
+        )
+        test_support.pkcs7_verify(
+            serialization.Encoding.SMIME,
+            sig,
+            signed_data,
+            [cert],
+            options,
+        )
+
+    def test_sign_additional_cert(self, backend):
+        data = b"hello world"
+        cert, key = _generate_sm2_cert_key()
+        # Generate another SM2 cert to use as additional
+        additional_cert, _ = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+            .add_certificate(additional_cert)
+        )
+        options: typing.List[pkcs7.PKCS7Options] = []
+        sig = builder.sign(serialization.Encoding.DER, options)
+        assert (
+            sig.count(
+                additional_cert.public_bytes(serialization.Encoding.DER)
+            )
+            == 1
+        )
+
+    def test_sign_smime_canonicalization(self, backend):
+        data = b"hello\nworld"
+        cert, key = _generate_sm2_cert_key()
+        builder = (
+            pkcs7.PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SM3())
+        )
+        options: typing.List[pkcs7.PKCS7Options] = []
+        sig = builder.sign(serialization.Encoding.DER, options)
+        # LF gets converted to CR+LF
+        assert data not in sig
+        assert b"hello\r\nworld" in sig
+        test_support.pkcs7_verify(
+            serialization.Encoding.DER, sig, None, [cert], options
+        )
 
 
 @pytest.mark.supported(
