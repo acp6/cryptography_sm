@@ -1053,6 +1053,218 @@ impl AesCcm {
 }
 
 // NO-COVERAGE-START
+#[cfg(not(any(
+    CRYPTOGRAPHY_IS_LIBRESSL,
+    CRYPTOGRAPHY_IS_BORINGSSL,
+    CRYPTOGRAPHY_IS_AWSLC
+)))]
+#[pyo3::pyclass(
+    frozen,
+    module = "cryptography.hazmat.bindings._rust.openssl.aead",
+    name = "SM4CCM"
+)]
+// NO-COVERAGE-END
+struct Sm4Ccm {
+    ctx: LazyEvpCipherAead,
+    tag_length: usize,
+}
+
+#[cfg(not(any(
+    CRYPTOGRAPHY_IS_LIBRESSL,
+    CRYPTOGRAPHY_IS_BORINGSSL,
+    CRYPTOGRAPHY_IS_AWSLC
+)))]
+#[pyo3::pymethods]
+impl Sm4Ccm {
+    #[new]
+    #[pyo3(signature = (key, tag_length=None))]
+    fn new(
+        py: pyo3::Python<'_>,
+        key: pyo3::Py<pyo3::PyAny>,
+        tag_length: Option<usize>,
+    ) -> CryptographyResult<Sm4Ccm> {
+        let key_buf = key.extract::<CffiBuf<'_>>(py)?;
+        if key_buf.as_bytes().len() != 16 {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err(
+                    "SM4CCM key must be 128 bits.",
+                ),
+            ));
+        }
+        let tag_length = tag_length.unwrap_or(16);
+        if ![4, 6, 8, 10, 12, 14, 16].contains(&tag_length) {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err("Invalid tag_length"),
+            ));
+        }
+
+        let cipher = openssl::cipher::Cipher::fetch(None, "sm4-ccm", None)
+            .map_err(|_| {
+                exceptions::UnsupportedAlgorithm::new_err((
+                    "SM4-CCM is not supported by this version of OpenSSL",
+                    exceptions::Reasons::UNSUPPORTED_CIPHER,
+                ))
+            })?;
+        let cipher_ref: &'static openssl::cipher::CipherRef =
+            &*Box::leak(Box::new(cipher));
+
+        Ok(Sm4Ccm {
+            ctx: LazyEvpCipherAead::new(cipher_ref, key, tag_length, false, true),
+            tag_length,
+        })
+    }
+
+    #[staticmethod]
+    fn generate_key(
+        py: pyo3::Python<'_>,
+    ) -> CryptographyResult<pyo3::Bound<'_, pyo3::types::PyBytes>> {
+        crate::backend::rand::get_rand_bytes(py, 16)
+    }
+
+    #[pyo3(signature = (nonce, data, associated_data))]
+    fn encrypt<'p>(
+        &self,
+        py: pyo3::Python<'p>,
+        nonce: CffiBuf<'_>,
+        data: CffiBuf<'_>,
+        associated_data: Option<CffiBuf<'_>>,
+    ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
+        let data_bytes = data.as_bytes();
+        check_length(data_bytes)?;
+        Ok(pyo3::types::PyBytes::new_with(
+            py,
+            data_bytes.len() + self.tag_length,
+            |b| {
+                let buf = CffiMutBuf::from_bytes(py, b);
+                self.encrypt_into(py, nonce, data, associated_data, buf)?;
+                Ok(())
+            },
+        )?)
+    }
+
+    #[pyo3(signature = (nonce, data, associated_data, buf))]
+    fn encrypt_into(
+        &self,
+        py: pyo3::Python<'_>,
+        nonce: CffiBuf<'_>,
+        data: CffiBuf<'_>,
+        associated_data: Option<CffiBuf<'_>>,
+        mut buf: CffiMutBuf<'_>,
+    ) -> CryptographyResult<usize> {
+        let nonce_bytes = nonce.as_bytes();
+        let data_bytes = data.as_bytes();
+        let aad = associated_data.map(Aad::Single);
+
+        if nonce_bytes.len() < 7 || nonce_bytes.len() > 13 {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err("Nonce must be between 7 and 13 bytes"),
+            ));
+        }
+
+        check_length(data_bytes)?;
+        let l_val = 15 - nonce_bytes.len();
+        let max_length = 1usize.checked_shl(8 * l_val as u32);
+        if max_length.map(|v| v < data_bytes.len()).unwrap_or(false) {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err("Data too long for nonce"),
+            ));
+        }
+
+        let expected_len = data_bytes.len() + self.tag_length;
+        if buf.as_mut_bytes().len() != expected_len {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "buffer must be {} bytes",
+                    expected_len
+                )),
+            ));
+        }
+
+        self.ctx
+            .encrypt_into(py, data_bytes, aad, Some(nonce_bytes), buf.as_mut_bytes())?;
+        Ok(expected_len)
+    }
+
+    #[pyo3(signature = (nonce, data, associated_data))]
+    fn decrypt<'p>(
+        &self,
+        py: pyo3::Python<'p>,
+        nonce: CffiBuf<'_>,
+        data: CffiBuf<'_>,
+        associated_data: Option<CffiBuf<'_>>,
+    ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
+        let nonce_bytes = nonce.as_bytes();
+        let data_bytes = data.as_bytes();
+
+        if nonce_bytes.len() < 7 || nonce_bytes.len() > 13 {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err("Nonce must be between 7 and 13 bytes"),
+            ));
+        }
+        if data_bytes.len() < self.tag_length {
+            return Err(CryptographyError::from(exceptions::InvalidTag::new_err(())));
+        }
+
+        Ok(pyo3::types::PyBytes::new_with(
+            py,
+            data_bytes.len() - self.tag_length,
+            |b| {
+                let buf = CffiMutBuf::from_bytes(py, b);
+                self.decrypt_into(py, nonce, data, associated_data, buf)?;
+                Ok(())
+            },
+        )?)
+    }
+
+    #[pyo3(signature = (nonce, data, associated_data, buf))]
+    fn decrypt_into(
+        &self,
+        py: pyo3::Python<'_>,
+        nonce: CffiBuf<'_>,
+        data: CffiBuf<'_>,
+        associated_data: Option<CffiBuf<'_>>,
+        mut buf: CffiMutBuf<'_>,
+    ) -> CryptographyResult<usize> {
+        let nonce_bytes = nonce.as_bytes();
+        let data_bytes = data.as_bytes();
+        let aad = associated_data.map(Aad::Single);
+
+        if nonce_bytes.len() < 7 || nonce_bytes.len() > 13 {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err("Nonce must be between 7 and 13 bytes"),
+            ));
+        }
+
+        if data_bytes.len() < self.tag_length {
+            return Err(CryptographyError::from(exceptions::InvalidTag::new_err(())));
+        }
+
+        let l_val = 15 - nonce_bytes.len();
+        let max_length = 1usize.checked_shl(8 * l_val as u32);
+        let expected_len = data_bytes.len() - self.tag_length;
+        if max_length.map(|v| v < expected_len).unwrap_or(false) {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err("Data too long for nonce"),
+            ));
+        }
+
+        if buf.as_mut_bytes().len() != expected_len {
+            return Err(CryptographyError::from(
+                pyo3::exceptions::PyValueError::new_err(format!(
+                    "buffer must be {} bytes",
+                    expected_len
+                )),
+            ));
+        }
+
+        self.ctx
+            .decrypt_into(py, data_bytes, aad, Some(nonce_bytes), buf.as_mut_bytes())?;
+
+        Ok(expected_len)
+    }
+}
+
+// NO-COVERAGE-START
 #[pyo3::pyclass(
     frozen,
     module = "cryptography.hazmat.bindings._rust.openssl.aead",
@@ -1660,4 +1872,12 @@ impl AesGcmSiv {
 pub(crate) mod aead {
     #[pymodule_export]
     use super::{AesCcm, AesGcm, AesGcmSiv, AesOcb3, AesSiv, ChaCha20Poly1305};
+
+    #[cfg(not(any(
+        CRYPTOGRAPHY_IS_LIBRESSL,
+        CRYPTOGRAPHY_IS_BORINGSSL,
+        CRYPTOGRAPHY_IS_AWSLC
+    )))]
+    #[pymodule_export]
+    use super::Sm4Ccm;
 }

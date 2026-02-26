@@ -7,9 +7,10 @@ import os
 
 import pytest
 
-from cryptography.exceptions import InvalidTag
+from cryptography.exceptions import InvalidTag, UnsupportedAlgorithm
 from cryptography.hazmat.decrepit.ciphers.modes import CFB, OFB
 from cryptography.hazmat.primitives.ciphers import algorithms, base, modes
+from cryptography.hazmat.primitives.ciphers.aead import SM4CCM
 
 from ...utils import load_nist_vectors, load_vectors_from_file
 from .utils import generate_encrypt_test
@@ -180,3 +181,112 @@ class TestSM4ModeGCM:
         decryptor.update(ciphertext[:-1])
         with pytest.raises(InvalidTag):
             decryptor.finalize_with_tag(tag)
+
+
+def _sm4ccm_supported():
+    try:
+        SM4CCM(b"\x00" * 16)
+        return True
+    except UnsupportedAlgorithm:
+        return False
+
+
+@pytest.mark.skipif(
+    not _sm4ccm_supported(),
+    reason="Does not support SM4CCM",
+)
+class TestSM4ModeCCM:
+    @pytest.mark.parametrize(
+        "vector",
+        load_vectors_from_file(
+            os.path.join("ciphers", "SM4", "rfc8998_ccm.txt"),
+            load_nist_vectors,
+        ),
+    )
+    def test_encryption(self, vector):
+        key = binascii.unhexlify(vector["key"])
+        iv = binascii.unhexlify(vector["iv"])
+        aad = binascii.unhexlify(vector["aad"])
+        tag = binascii.unhexlify(vector["tag"])
+        plaintext = binascii.unhexlify(vector["plaintext"])
+        ciphertext = binascii.unhexlify(vector["ciphertext"])
+
+        sm4ccm = SM4CCM(key)
+        computed = sm4ccm.encrypt(iv, plaintext, aad)
+        assert computed == ciphertext + tag
+
+    @pytest.mark.parametrize(
+        "vector",
+        load_vectors_from_file(
+            os.path.join("ciphers", "SM4", "rfc8998_ccm.txt"),
+            load_nist_vectors,
+        ),
+    )
+    def test_decryption(self, vector):
+        key = binascii.unhexlify(vector["key"])
+        iv = binascii.unhexlify(vector["iv"])
+        aad = binascii.unhexlify(vector["aad"])
+        tag = binascii.unhexlify(vector["tag"])
+        plaintext = binascii.unhexlify(vector["plaintext"])
+        ciphertext = binascii.unhexlify(vector["ciphertext"])
+
+        sm4ccm = SM4CCM(key)
+        computed_pt = sm4ccm.decrypt(iv, ciphertext + tag, aad)
+        assert computed_pt == plaintext
+
+    def test_invalid_tag(self):
+        key = b"\x00" * 16
+        sm4ccm = SM4CCM(key)
+        nonce = os.urandom(12)
+        ct = sm4ccm.encrypt(nonce, b"hello", None)
+        with pytest.raises(InvalidTag):
+            sm4ccm.decrypt(nonce, ct[:-1] + bytes([ct[-1] ^ 1]), None)
+
+    def test_roundtrip(self):
+        key = SM4CCM.generate_key()
+        sm4ccm = SM4CCM(key)
+        nonce = os.urandom(12)
+        pt = b"test data for sm4-ccm roundtrip"
+        aad = b"additional data"
+        ct = sm4ccm.encrypt(nonce, pt, aad)
+        assert sm4ccm.decrypt(nonce, ct, aad) == pt
+
+    def test_invalid_key_length(self):
+        with pytest.raises(ValueError):
+            SM4CCM(b"\x00" * 32)
+        with pytest.raises(ValueError):
+            SM4CCM(b"\x00" * 8)
+
+    def test_invalid_nonce_length(self):
+        key = b"\x00" * 16
+        sm4ccm = SM4CCM(key)
+        with pytest.raises(ValueError):
+            sm4ccm.encrypt(b"\x00" * 6, b"hello", None)
+        with pytest.raises(ValueError):
+            sm4ccm.encrypt(b"\x00" * 14, b"hello", None)
+
+    def test_invalid_tag_length(self):
+        key = b"\x00" * 16
+        with pytest.raises(ValueError):
+            SM4CCM(key, tag_length=7)
+        with pytest.raises(ValueError):
+            SM4CCM(key, tag_length=2)
+
+    def test_default_tag_length(self):
+        key = b"\x00" * 16
+        sm4ccm = SM4CCM(key)
+        nonce = os.urandom(12)
+        ct = sm4ccm.encrypt(nonce, b"hello", None)
+        assert len(ct) == len(b"hello") + 16
+
+    def test_custom_tag_length(self):
+        key = b"\x00" * 16
+        sm4ccm = SM4CCM(key, tag_length=8)
+        nonce = os.urandom(12)
+        ct = sm4ccm.encrypt(nonce, b"hello", None)
+        assert len(ct) == len(b"hello") + 8
+        assert sm4ccm.decrypt(nonce, ct, None) == b"hello"
+
+    def test_generate_key(self):
+        key = SM4CCM.generate_key()
+        assert len(key) == 16

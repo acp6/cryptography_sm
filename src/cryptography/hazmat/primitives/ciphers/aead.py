@@ -13,6 +13,7 @@ __all__ = [
     "AESOCB3",
     "AESSIV",
     "ChaCha20Poly1305",
+    "SM4CCM",
 ]
 
 AESGCM = rust_openssl.aead.AESGCM
@@ -21,3 +22,4 @@ AESCCM = rust_openssl.aead.AESCCM
 AESSIV = rust_openssl.aead.AESSIV
 AESOCB3 = rust_openssl.aead.AESOCB3
 AESGCMSIV = rust_openssl.aead.AESGCMSIV
+SM4CCM = rust_openssl.aead.SM4CCM
