@@ -1,6 +1,6 @@
 set -e
 
-OPENSSL_VERSION="3.5.5"
+OPENSSL_VERSION="3.5.9"
 CWD=$(pwd)
 
 # Activate virtualenv (create if not exists)
