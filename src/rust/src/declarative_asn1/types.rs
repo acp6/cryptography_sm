@@ -6,7 +6,7 @@ use asn1::{
     IA5String as Asn1IA5String, PrintableString as Asn1PrintableString, SimpleAsn1Readable,
     UtcTime as Asn1UtcTime,
 };
-use pyo3::types::{PyAnyMethods, PyTzInfoAccess};
+use pyo3::types::{PyAnyMethods, PyListMethods, PySequenceMethods, PyTzInfoAccess};
 use pyo3::{IntoPyObject, PyTypeInfo};
 
 use crate::error::CryptographyError;
@@ -23,11 +23,28 @@ pub enum Type {
     Sequence(pyo3::Py<pyo3::types::PyType>, pyo3::Py<pyo3::types::PyDict>),
     /// SEQUENCE OF (`list[`T`]`)
     SequenceOf(pyo3::Py<AnnotatedType>),
+    /// SET(`class`, `dict`)
+    /// The first element is the Python class that represents the set,
+    /// the second element is a dict of the (already converted) fields of the class.
+    Set(pyo3::Py<pyo3::types::PyType>, pyo3::Py<pyo3::types::PyDict>),
+    /// SET OF (`list[`T`]`)
+    SetOf(pyo3::Py<AnnotatedType>),
     /// OPTIONAL (`T | None`)
     Option(pyo3::Py<AnnotatedType>),
     /// CHOICE (`T | U | ...`)
     /// The list contains elements of type Variant
     Choice(pyo3::Py<pyo3::types::PyList>),
+    /// Value set (an `enum.Enum` whose member values all share
+    /// a single underlying ASN.1 type).
+    /// The first element is the Python enum class, the second
+    /// element is the (already converted) underlying type of the
+    /// member values, and the third element is a map from member
+    /// value to enum member, used when decoding.
+    ValueSet(
+        pyo3::Py<pyo3::types::PyType>,
+        pyo3::Py<AnnotatedType>,
+        pyo3::Py<pyo3::types::PyDict>,
+    ),
 
     // Python types that we map to canonical ASN.1 types
     //
@@ -51,8 +68,22 @@ pub enum Type {
     GeneralizedTime(),
     /// BIT STRING (`bytes`)
     BitString(),
+    /// ANY (parsed as a TLV)
+    Tlv(),
     /// NULL
     Null(),
+
+    // X.509 types that we special-case to allow embedding them
+    // in ASN.1 structures.
+    //
+    /// `x509.Certificate`
+    Certificate(),
+    /// `x509.CertificateSigningRequest`
+    CertificateSigningRequest(),
+    /// `x509.CertificateRevocationList`
+    CertificateRevocationList(),
+    /// `x509.Name`
+    Name(),
 }
 
 /// A type that we know how to encode/decode, along with any
@@ -167,6 +198,40 @@ impl Variant {
     }
 }
 
+#[pyo3::pyclass(frozen, module = "cryptography.hazmat.bindings._rust.asn1")]
+pub struct Tlv {
+    #[pyo3(get)]
+    pub tag_bytes: pyo3::Py<pyo3::types::PyBytes>,
+
+    // We store the bytes of the entire TLV, and to access the Value part
+    // we store the index where it starts.
+    pub data_index: usize,
+    pub full_data: pyo3::Py<pyo3::types::PyBytes>,
+}
+
+#[pyo3::pymethods]
+impl Tlv {
+    pub fn parse<'p>(
+        &'p self,
+        py: pyo3::Python<'p>,
+        class: &pyo3::Bound<'p, pyo3::types::PyType>,
+    ) -> pyo3::PyResult<pyo3::Bound<'p, pyo3::PyAny>> {
+        let annotated_type = python_class_to_annotated(py, class)?;
+        crate::declarative_asn1::asn1::decode_der(py, &annotated_type, self.full_data.as_bytes(py))
+    }
+
+    #[getter]
+    pub fn data<'p>(
+        &self,
+        py: pyo3::Python<'p>,
+    ) -> pyo3::PyResult<pyo3::Bound<'p, pyo3::types::PyMemoryView>> {
+        let mem_view = pyo3::types::PyMemoryView::from(self.full_data.bind(py))?;
+        let seq = mem_view.cast::<pyo3::types::PySequence>().unwrap();
+        let slice = seq.get_slice(self.data_index, seq.len()?)?;
+        pyo3::types::PyMemoryView::from(&slice)
+    }
+}
+
 // TODO: Once the minimum Python version is >= 3.10, use a `self_cell`
 // to store the owned PyString along with the dependent Asn1PrintableString
 // in order to avoid verifying the string twice (once during construction,
@@ -201,6 +266,10 @@ impl PrintableString {
 
     fn __eq__(&self, py: pyo3::Python<'_>, other: pyo3::PyRef<'_, Self>) -> pyo3::PyResult<bool> {
         (**self.inner.bind(py)).eq(other.inner.bind(py))
+    }
+
+    fn __hash__(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<isize> {
+        (**self.inner.bind(py)).hash()
     }
 
     pub fn __repr__<'py>(
@@ -250,6 +319,10 @@ impl IA5String {
         (**self.inner.bind(py)).eq(other.inner.bind(py))
     }
 
+    fn __hash__(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<isize> {
+        (**self.inner.bind(py)).hash()
+    }
+
     pub fn __repr__<'py>(
         &self,
         py: pyo3::Python<'py>,
@@ -262,7 +335,13 @@ impl IA5String {
 }
 
 #[derive(pyo3::FromPyObject)]
-#[pyo3::pyclass(frozen, module = "cryptography.hazmat.bindings._rust.asn1")]
+// NO-COVERAGE-START
+#[pyo3::pyclass(
+    frozen,
+    name = "UTCTime",
+    module = "cryptography.hazmat.bindings._rust.asn1"
+)]
+// NO-COVERAGE-END
 pub struct UtcTime {
     pub(crate) inner: pyo3::Py<pyo3::types::PyDateTime>,
 }
@@ -274,7 +353,7 @@ impl UtcTime {
     fn new(py: pyo3::Python<'_>, inner: pyo3::Py<pyo3::types::PyDateTime>) -> pyo3::PyResult<Self> {
         if inner.bind(py).get_tzinfo().is_none() {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "invalid UtcTime: cannot initialize with naive datetime object",
+                "invalid UTCTime: cannot initialize with naive datetime object",
             ));
         }
         let (datetime, microseconds) =
@@ -282,11 +361,11 @@ impl UtcTime {
 
         if microseconds.is_some() {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "invalid UtcTime: fractional seconds are not supported",
+                "invalid UTCTime: fractional seconds are not supported",
             ));
         }
         Asn1UtcTime::new(datetime).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err(format!("invalid UtcTime: {e}"))
+            pyo3::exceptions::PyValueError::new_err(format!("invalid UTCTime: {e}"))
         })?;
         Ok(UtcTime { inner })
     }
@@ -302,13 +381,17 @@ impl UtcTime {
         (**self.inner.bind(py)).eq(other.inner.bind(py))
     }
 
+    fn __hash__(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<isize> {
+        (**self.inner.bind(py)).hash()
+    }
+
     pub fn __repr__<'py>(
         &self,
         py: pyo3::Python<'py>,
     ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyString>> {
         pyo3::types::PyString::from_fmt(
             py,
-            format_args!("UtcTime({})", self.inner.bind(py).repr()?),
+            format_args!("UTCTime({})", self.inner.bind(py).repr()?),
         )
     }
 }
@@ -345,6 +428,10 @@ impl GeneralizedTime {
 
     fn __eq__(&self, py: pyo3::Python<'_>, other: pyo3::PyRef<'_, Self>) -> pyo3::PyResult<bool> {
         (**self.inner.bind(py)).eq(other.inner.bind(py))
+    }
+
+    fn __hash__(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<isize> {
+        (**self.inner.bind(py)).hash()
     }
 
     pub fn __repr__<'py>(
@@ -396,6 +483,12 @@ impl BitString {
             && self.padding_bits == other.padding_bits)
     }
 
+    fn __hash__(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<isize> {
+        (self.data.bind(py), self.padding_bits)
+            .into_pyobject(py)?
+            .hash()
+    }
+
     pub fn __repr__<'py>(
         &self,
         py: pyo3::Python<'py>,
@@ -422,6 +515,58 @@ impl Null {
     }
     pub fn __repr__(&self) -> String {
         "Null()".to_string()
+    }
+}
+
+#[derive(pyo3::FromPyObject)]
+#[pyo3::pyclass(frozen, generic, module = "cryptography.hazmat.bindings._rust.asn1")]
+pub struct SetOf {
+    pub(crate) inner: pyo3::Py<pyo3::types::PyList>,
+}
+
+#[pyo3::pymethods]
+impl SetOf {
+    #[new]
+    #[pyo3(signature = (inner,))]
+    fn new(inner: pyo3::Py<pyo3::types::PyList>) -> Self {
+        SetOf { inner }
+    }
+
+    pub fn as_list(&self, py: pyo3::Python<'_>) -> pyo3::Py<pyo3::types::PyList> {
+        self.inner.clone_ref(py)
+    }
+
+    fn __eq__(&self, py: pyo3::Python<'_>, other: pyo3::PyRef<'_, Self>) -> pyo3::PyResult<bool> {
+        // SET OF is unordered, so two values are equal if they contain the
+        // same elements in any order. Elements needn't be hashable or
+        // orderable, so pair them up with `==` (this is quadratic, but
+        // these are small).
+        let this = self.inner.bind(py);
+        let other = other.inner.bind(py);
+        if this.len() != other.len() {
+            return Ok(false);
+        }
+        let mut unmatched: Vec<pyo3::Bound<'_, pyo3::PyAny>> = other.iter().collect();
+        for item in this.iter() {
+            let mut found = None;
+            for (i, candidate) in unmatched.iter().enumerate() {
+                if item.eq(candidate)? {
+                    found = Some(i);
+                    break;
+                }
+            }
+            match found {
+                Some(i) => {
+                    unmatched.swap_remove(i);
+                }
+                None => return Ok(false),
+            }
+        }
+        Ok(true)
+    }
+
+    fn __repr__(&self, py: pyo3::Python<'_>) -> pyo3::PyResult<String> {
+        Ok(format!("SetOf({})", self.inner.bind(py).repr()?))
     }
 }
 
@@ -452,8 +597,18 @@ pub fn non_root_python_to_rust<'p>(
         Type::GeneralizedTime().into_pyobject(py)
     } else if class.is(BitString::type_object(py)) {
         Type::BitString().into_pyobject(py)
+    } else if class.is(Tlv::type_object(py)) {
+        Type::Tlv().into_pyobject(py)
     } else if class.is(Null::type_object(py)) {
         Type::Null().into_pyobject(py)
+    } else if class.is(crate::x509::certificate::Certificate::type_object(py)) {
+        Type::Certificate().into_pyobject(py)
+    } else if class.is(crate::x509::csr::CertificateSigningRequest::type_object(py)) {
+        Type::CertificateSigningRequest().into_pyobject(py)
+    } else if class.is(crate::x509::crl::CertificateRevocationList::type_object(py)) {
+        Type::CertificateRevocationList().into_pyobject(py)
+    } else if class.is(&crate::types::NAME.get(py)?) {
+        Type::Name().into_pyobject(py)
     } else {
         Err(pyo3::exceptions::PyTypeError::new_err(format!(
             "cannot handle type: {class:?}"
@@ -491,11 +646,56 @@ pub(crate) fn python_class_to_annotated<'p>(
 ) -> pyo3::PyResult<pyo3::Bound<'p, AnnotatedType>> {
     if let Ok(root) = class.getattr("__asn1_root__") {
         // Handle decorated classes
-        Ok(root.cast_into::<AnnotatedType>()?)
+        AnnotatedType {
+            inner: root.cast_into::<Type>()?.unbind(),
+            annotation: Annotation {
+                default: None,
+                encoding: None,
+                size: None,
+            }
+            .into_pyobject(py)?
+            .unbind(),
+        }
+        .into_pyobject(py)
     } else {
         // Handle builtin types
         pyo3::Bound::new(py, non_root_type_to_annotated(py, class)?)
     }
+}
+
+// Builds the `AnnotatedType` used to encode a top-level value passed to
+// `encode_der`.
+pub(crate) fn encode_value_to_annotated<'p>(
+    py: pyo3::Python<'p>,
+    value: &pyo3::Bound<'p, pyo3::types::PyAny>,
+) -> pyo3::PyResult<pyo3::Bound<'p, AnnotatedType>> {
+    if let Ok(setof) = value.cast::<SetOf>() {
+        // SET OF is homogeneous, so we infer the element type from the
+        // first element.
+        let inner = match setof.get().inner.bind(py).iter().next() {
+            Some(first) => {
+                let class = first.get_type();
+                python_class_to_annotated(py, &class)?
+            }
+            // An empty SET OF has no elements to encode, so the inner
+            // type is never used; any type works as a placeholder.
+            None => python_class_to_annotated(py, &Tlv::type_object(py))?,
+        };
+        return pyo3::Bound::new(
+            py,
+            AnnotatedType {
+                inner: pyo3::Py::new(py, Type::SetOf(inner.unbind()))?,
+                annotation: Annotation {
+                    default: None,
+                    encoding: None,
+                    size: None,
+                }
+                .into_pyobject(py)?
+                .unbind(),
+            },
+        );
+    }
+    python_class_to_annotated(py, &value.get_type())
 }
 
 // Checks if encoding `tag_without_encoding` using `encoding` results
@@ -549,11 +749,14 @@ pub(crate) fn is_tag_valid_for_type(
 ) -> bool {
     match type_ {
         Type::Sequence(_, _) => check_tag_with_encoding(asn1::Sequence::TAG, encoding, tag),
+        Type::Set(_, _) => check_tag_with_encoding(asn1::Set::TAG, encoding, tag),
         Type::SequenceOf(_) => check_tag_with_encoding(asn1::Sequence::TAG, encoding, tag),
+        Type::SetOf(_) => check_tag_with_encoding(asn1::SetOf::<()>::TAG, encoding, tag),
         Type::Option(t) => is_tag_valid_for_type(py, tag, t.get().inner.get(), encoding),
         Type::Choice(variants) => variants.bind(py).into_iter().any(|v| {
             is_tag_valid_for_variant(py, tag, v.cast::<Variant>().unwrap().get(), encoding)
         }),
+        Type::ValueSet(_, t, _) => is_tag_valid_for_type(py, tag, t.get().inner.get(), encoding),
         Type::PyBool() => check_tag_with_encoding(bool::TAG, encoding, tag),
         Type::PyInt() => check_tag_with_encoding(asn1::BigInt::TAG, encoding, tag),
         Type::PyBytes() => {
@@ -572,16 +775,57 @@ pub(crate) fn is_tag_valid_for_type(
             check_tag_with_encoding(asn1::GeneralizedTime::TAG, encoding, tag)
         }
         Type::BitString() => check_tag_with_encoding(asn1::BitString::TAG, encoding, tag),
+        Type::Tlv() => {
+            match encoding {
+                Some(e) => match e.get() {
+                    // TLVs with implicit annotations are not supported
+                    // (they are caught first at the Python level)
+                    Encoding::Implicit(_) => false,
+                    Encoding::Explicit(n) => tag == asn1::explicit_tag(*n),
+                },
+                // When reading TLVs we accept any tag
+                None => true,
+            }
+        }
         Type::Null() => check_tag_with_encoding(asn1::Null::TAG, encoding, tag),
+        // Certificates, CSRs, CRLs, and Names are all SEQUENCEs
+        Type::Certificate()
+        | Type::CertificateSigningRequest()
+        | Type::CertificateRevocationList()
+        | Type::Name() => check_tag_with_encoding(asn1::Sequence::TAG, encoding, tag),
     }
+}
+
+// Builds the AnnotatedType used to encode/decode the underlying value of
+// a value set member: the underlying type, annotated with the encoding of
+// the value set field. The DEFAULT annotation (if any) applies to the enum
+// member (not the underlying value), so it is handled at the value set
+// level and not propagated here.
+pub(crate) fn value_set_inner_type(
+    py: pyo3::Python<'_>,
+    inner: &AnnotatedType,
+    annotation: &Annotation,
+) -> pyo3::PyResult<AnnotatedType> {
+    Ok(AnnotatedType {
+        inner: inner.inner.clone_ref(py),
+        annotation: pyo3::Py::new(
+            py,
+            Annotation {
+                default: None,
+                encoding: annotation.encoding.as_ref().map(|e| e.clone_ref(py)),
+                size: annotation.size.as_ref().map(|s| s.clone_ref(py)),
+            },
+        )?,
+    })
 }
 
 pub(crate) fn check_size_constraint(
     size_annotation: &Option<pyo3::Py<Size>>,
-    data_length: usize,
+    data_length: impl FnOnce() -> usize,
     field_type: &str,
 ) -> Result<(), CryptographyError> {
     if let Some(size) = size_annotation {
+        let data_length = data_length();
         let min = size.get().min;
         let max = size.get().max.unwrap_or(usize::MAX);
         if !(min..=max).contains(&data_length) {
@@ -686,6 +930,38 @@ mod tests {
                 asn1::BigInt::TAG,
                 &variant,
                 &encoding
+            ));
+        })
+    }
+
+    #[test]
+    // Needed for coverage of `is_tag_valid_for_type(Type::Tlv())`, since
+    // `is_tag_valid_for_type` is never called with a TLV type.
+    fn test_tlv_is_tag_valid_for_type() {
+        pyo3::Python::initialize();
+
+        pyo3::Python::attach(|py| {
+            assert!(is_tag_valid_for_type(
+                py,
+                asn1::BigInt::TAG,
+                &Type::Tlv(),
+                &None
+            ));
+
+            let implicit_encoding = pyo3::Py::new(py, Encoding::Implicit(3)).ok();
+            assert!(!is_tag_valid_for_type(
+                py,
+                asn1::BigInt::TAG,
+                &Type::Tlv(),
+                &implicit_encoding
+            ));
+
+            let explicit_encoding = pyo3::Py::new(py, Encoding::Explicit(3)).ok();
+            assert!(is_tag_valid_for_type(
+                py,
+                asn1::explicit_tag(3),
+                &Type::Tlv(),
+                &explicit_encoding
             ));
         })
     }

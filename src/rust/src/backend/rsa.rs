@@ -4,6 +4,7 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::LazyLock;
 
 use pyo3::types::PyAnyMethods;
 
@@ -56,17 +57,25 @@ pub(crate) fn private_key_from_pkey(
 
 pub(crate) fn public_key_from_pkey(
     pkey: &openssl::pkey::PKeyRef<openssl::pkey::Public>,
-) -> RsaPublicKey {
-    RsaPublicKey {
+) -> CryptographyResult<RsaPublicKey> {
+    let rsa = pkey.rsa()?;
+    check_public_key_components(rsa.e(), rsa.n())?;
+    Ok(RsaPublicKey {
         pkey: pkey.to_owned(),
-    }
+    })
 }
 
 #[pyo3::pyfunction]
-fn generate_private_key(public_exponent: u32, key_size: u32) -> CryptographyResult<RsaPrivateKey> {
+fn generate_private_key(
+    py: pyo3::Python<'_>,
+    public_exponent: u32,
+    key_size: u32,
+) -> CryptographyResult<RsaPrivateKey> {
     let e = openssl::bn::BigNum::from_u32(public_exponent)?;
-    let rsa = openssl::rsa::Rsa::generate_with_e(key_size, &e)?;
-    let pkey = openssl::pkey::PKey::from_rsa(rsa)?;
+    let pkey = py.detach(|| {
+        let rsa = openssl::rsa::Rsa::generate_with_e(key_size, &e)?;
+        openssl::pkey::PKey::from_rsa(rsa)
+    })?;
     Ok(RsaPrivateKey { pkey })
 }
 
@@ -307,13 +316,16 @@ impl RsaPrivateKey {
         })?;
         setup_signature_ctx(py, &mut ctx, padding, &algorithm, self.pkey.size(), true)?;
 
-        let length = ctx.sign(data.as_bytes(), None)?;
+        let data_bytes = data.as_bytes();
+        let length = ctx.sign(data_bytes, None)?;
         Ok(pyo3::types::PyBytes::new_with(py, length, |b| {
-            let length = ctx.sign(data.as_bytes(), Some(b)).map_err(|_| {
-                pyo3::exceptions::PyValueError::new_err(
-                    "Digest or salt length too long for key size. Use a larger key or shorter salt length if you are specifying a PSS salt",
-                )
-            })?;
+            let length = py
+                .detach(|| ctx.sign(data_bytes, Some(b)))
+                .map_err(|_| {
+                    pyo3::exceptions::PyValueError::new_err(
+                        "Digest or salt length too long for key size. Use a larger key or shorter salt length if you are specifying a PSS salt",
+                    )
+                })?;
             assert_eq!(length, b.len());
             Ok(())
         })?.into_any())
@@ -351,9 +363,12 @@ impl RsaPrivateKey {
         //
         // Once OpenSSL 3.2.0 is out, this can be simplified, as OpenSSL will
         // have its own mitigations for Bleichenbacher's attack.
-        let length = ctx.decrypt(ciphertext, None).unwrap();
-        let mut plaintext = vec![0; length];
-        let result = ctx.decrypt(ciphertext, Some(&mut plaintext));
+        let (result, plaintext, length) = py.detach(|| {
+            let length = ctx.decrypt(ciphertext, None).unwrap();
+            let mut plaintext = vec![0; length];
+            let result = ctx.decrypt(ciphertext, Some(&mut plaintext));
+            (result, plaintext, length)
+        });
 
         let py_result =
             pyo3::types::PyBytes::new(py, &plaintext[..*result.as_ref().unwrap_or(&length)]);
@@ -411,8 +426,8 @@ impl RsaPrivateKey {
     fn private_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PrivateFormat,
         encryption_algorithm: &pyo3::Bound<'p, pyo3::PyAny>,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         utils::pkey_private_bytes(
@@ -464,9 +479,9 @@ impl RsaPublicKey {
         ctx.verify_init()?;
         setup_signature_ctx(py, &mut ctx, padding, &algorithm, self.pkey.size(), false)?;
 
-        let valid = ctx
-            .verify(data.as_bytes(), signature.as_bytes())
-            .unwrap_or(false);
+        let data_bytes = data.as_bytes();
+        let sig_bytes = signature.as_bytes();
+        let valid = py.detach(|| ctx.verify(data_bytes, sig_bytes).unwrap_or(false));
         if !valid {
             return Err(CryptographyError::from(
                 exceptions::InvalidSignature::new_err(()),
@@ -489,8 +504,8 @@ impl RsaPublicKey {
 
         let length = ctx.encrypt(plaintext, None)?;
         Ok(pyo3::types::PyBytes::new_with(py, length, |b| {
-            let length = ctx
-                .encrypt(plaintext, Some(b))
+            let length = py
+                .detach(|| ctx.encrypt(plaintext, Some(b)))
                 .map_err(|_| pyo3::exceptions::PyValueError::new_err("Encryption failed"))?;
             assert_eq!(length, b.len());
             Ok(())
@@ -550,8 +565,8 @@ impl RsaPublicKey {
     fn public_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PublicFormat,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         utils::pkey_public_bytes(py, slf, &slf.borrow().pkey, encoding, format, true, false)
     }
@@ -784,22 +799,25 @@ impl RsaPrivateNumbers {
 }
 
 fn check_public_key_components(
-    e: &pyo3::Bound<'_, pyo3::types::PyInt>,
-    n: &pyo3::Bound<'_, pyo3::types::PyInt>,
+    e: &openssl::bn::BigNumRef,
+    n: &openssl::bn::BigNumRef,
 ) -> CryptographyResult<()> {
-    if n.lt(3)? {
+    static THREE: LazyLock<openssl::bn::BigNum> =
+        LazyLock::new(|| openssl::bn::BigNum::from_u32(3).unwrap());
+
+    if n.cmp(&THREE).is_lt() {
         return Err(CryptographyError::from(
             pyo3::exceptions::PyValueError::new_err("n must be >= 3."),
         ));
     }
 
-    if e.lt(3)? || e.ge(n)? {
+    if e.cmp(&THREE).is_lt() || e >= n {
         return Err(CryptographyError::from(
             pyo3::exceptions::PyValueError::new_err("e must be >= 3 and < n."),
         ));
     }
 
-    if e.bitand(1)?.eq(0)? {
+    if e.is_even() {
         return Err(CryptographyError::from(
             pyo3::exceptions::PyValueError::new_err("e must be odd."),
         ));
@@ -823,13 +841,11 @@ impl RsaPublicNumbers {
     ) -> CryptographyResult<RsaPublicKey> {
         let _ = backend;
 
-        check_public_key_components(self.e.bind(py), self.n.bind(py))?;
+        let n = utils::py_int_to_bn(py, self.n.bind(py))?;
+        let e = utils::py_int_to_bn(py, self.e.bind(py))?;
+        check_public_key_components(&e, &n)?;
 
-        let rsa = openssl::rsa::Rsa::from_public_components(
-            utils::py_int_to_bn(py, self.n.bind(py))?,
-            utils::py_int_to_bn(py, self.e.bind(py))?,
-        )
-        .unwrap();
+        let rsa = openssl::rsa::Rsa::from_public_components(n, e).unwrap();
         let pkey = openssl::pkey::PKey::from_rsa(rsa)?;
         Ok(RsaPublicKey { pkey })
     }

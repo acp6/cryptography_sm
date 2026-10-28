@@ -10,6 +10,12 @@ use crate::backend::utils;
 use crate::error::{CryptographyError, CryptographyResult};
 use crate::{types, x509};
 
+fn warn_ffdh_deprecated(py: pyo3::Python<'_>) -> pyo3::PyResult<()> {
+    let warning_cls = types::DEPRECATED_IN_50.get(py)?;
+    let message = c"Diffie-Hellman over finite fields (FFDH) is deprecated and support will be removed in a future release. Use a more modern key exchange algorithm.";
+    pyo3::PyErr::warn(py, &warning_cls, message, 1)
+}
+
 #[pyo3::pyclass(frozen, module = "cryptography.hazmat.bindings._rust.openssl.dh")]
 pub(crate) struct DHPrivateKey {
     pkey: openssl::pkey::PKey<openssl::pkey::Private>,
@@ -28,6 +34,7 @@ struct DHParameters {
 #[pyo3::pyfunction]
 #[pyo3(signature = (generator, key_size, backend=None))]
 fn generate_parameters(
+    py: pyo3::Python<'_>,
     generator: u32,
     key_size: u32,
     backend: Option<pyo3::Bound<'_, pyo3::PyAny>>,
@@ -48,25 +55,58 @@ fn generate_parameters(
         ));
     }
 
-    let dh = openssl::dh::Dh::generate_params(key_size, generator)
+    let dh = py
+        .detach(|| openssl::dh::Dh::generate_params(key_size, generator))
         .map_err(|_| pyo3::exceptions::PyValueError::new_err("Unable to generate DH parameters"))?;
     Ok(DHParameters { dh })
 }
 
 pub(crate) fn private_key_from_pkey(
+    py: pyo3::Python<'_>,
     pkey: &openssl::pkey::PKeyRef<openssl::pkey::Private>,
-) -> DHPrivateKey {
-    DHPrivateKey {
+) -> CryptographyResult<DHPrivateKey> {
+    check_dh_parameters(&pkey.dh()?)?;
+    warn_ffdh_deprecated(py)?;
+    Ok(DHPrivateKey {
         pkey: pkey.to_owned(),
-    }
+    })
 }
 
 pub(crate) fn public_key_from_pkey(
+    py: pyo3::Python<'_>,
     pkey: &openssl::pkey::PKeyRef<openssl::pkey::Public>,
-) -> DHPublicKey {
-    DHPublicKey {
+) -> CryptographyResult<DHPublicKey> {
+    check_dh_parameters(&pkey.dh()?)?;
+    warn_ffdh_deprecated(py)?;
+    Ok(DHPublicKey {
         pkey: pkey.to_owned(),
-    }
+    })
+}
+
+// Build DHParameters from the DER encoding of a parameter structure. When
+// `x942` is true the optional trailing INTEGER is the X9.42 subprime `q`;
+// otherwise the structure is PKCS#3 and the optional trailing INTEGER is
+// `privateValueLength`, which we ignore.
+fn load_dh_parameters(data: &[u8], x942: bool) -> CryptographyResult<DHParameters> {
+    let (p, q, g) = if x942 {
+        let asn1_params = asn1::parse_single::<common::DHParams<'_>>(data)?;
+        let p = openssl::bn::BigNum::from_slice(asn1_params.p.as_bytes())?;
+        let q = asn1_params
+            .q
+            .map(|q| openssl::bn::BigNum::from_slice(q.as_bytes()))
+            .transpose()?;
+        let g = openssl::bn::BigNum::from_slice(asn1_params.g.as_bytes())?;
+        (p, q, g)
+    } else {
+        let asn1_params = asn1::parse_single::<common::BasicDHParams<'_>>(data)?;
+        let p = openssl::bn::BigNum::from_slice(asn1_params.p.as_bytes())?;
+        let g = openssl::bn::BigNum::from_slice(asn1_params.g.as_bytes())?;
+        (p, None, g)
+    };
+
+    let dh = openssl::dh::Dh::from_pqg(p, q, g)?;
+    check_dh_parameters(&dh)?;
+    Ok(DHParameters { dh })
 }
 
 #[pyo3::pyfunction]
@@ -76,18 +116,9 @@ fn from_der_parameters(
     backend: Option<pyo3::Bound<'_, pyo3::PyAny>>,
 ) -> CryptographyResult<DHParameters> {
     let _ = backend;
-    let asn1_params = asn1::parse_single::<common::DHParams<'_>>(data)?;
-
-    let p = openssl::bn::BigNum::from_slice(asn1_params.p.as_bytes())?;
-    let q = asn1_params
-        .q
-        .map(|q| openssl::bn::BigNum::from_slice(q.as_bytes()))
-        .transpose()?;
-    let g = openssl::bn::BigNum::from_slice(asn1_params.g.as_bytes())?;
-
-    Ok(DHParameters {
-        dh: openssl::dh::Dh::from_pqg(p, q, g)?,
-    })
+    // DER carries no tag distinguishing PKCS#3 from X9.42, so we permissively
+    // accept an optional trailing `q` for backwards compatibility.
+    load_dh_parameters(data, true)
 }
 
 #[pyo3::pyfunction]
@@ -103,7 +134,7 @@ fn from_pem_parameters(
         "Valid PEM but no BEGIN DH PARAMETERS/END DH PARAMETERS delimiters. Are you sure this is a DH parameters?",
     )?;
 
-    from_der_parameters(parsed.contents(), None)
+    load_dh_parameters(parsed.contents(), parsed.tag() == "X9.42 DH PARAMETERS")
 }
 
 fn dh_parameters_from_numbers(
@@ -119,13 +150,28 @@ fn dh_parameters_from_numbers(
     let g = utils::py_int_to_bn(py, numbers.g.bind(py))?;
 
     let dh = openssl::dh::Dh::from_pqg(p, q, g)?;
+    check_dh_parameters(&dh)?;
+    Ok(dh)
+}
 
-    if !dh.check_key()? {
+fn check_dh_parameters<T: openssl::pkey::HasParams>(
+    dh: &openssl::dh::Dh<T>,
+) -> CryptographyResult<()> {
+    // Enforce the modulus minimum ourselves rather than relying on OpenSSL's
+    // DH_check, so an undersized modulus is rejected consistently across every
+    // DH construction path and regardless of backend behaviour. This matches
+    // the minimum already enforced for DH private keys and DHParameterNumbers.
+    if dh.prime_p().num_bits() < cryptography_key_parsing::MIN_DH_MODULUS_SIZE as i32 {
         return Err(CryptographyError::from(
             pyo3::exceptions::PyValueError::new_err("Invalid DH parameters"),
         ));
     }
-    Ok(dh)
+    if !dh.check_key().unwrap_or(false) {
+        return Err(CryptographyError::from(
+            pyo3::exceptions::PyValueError::new_err("Invalid DH parameters"),
+        ));
+    }
+    Ok(())
 }
 
 fn clone_dh<T: openssl::pkey::HasParams>(
@@ -200,7 +246,7 @@ impl DHPrivateKey {
         })
     }
 
-    #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+    #[cfg(not(CRYPTOGRAPHY_IS_BORINGSSL))]
     fn public_key(&self) -> CryptographyResult<DHPublicKey> {
         let orig_dh = self.pkey.dh().unwrap();
         let dh = clone_dh(&orig_dh)?;
@@ -220,11 +266,11 @@ impl DHPrivateKey {
     fn private_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PrivateFormat,
         encryption_algorithm: &pyo3::Bound<'p, pyo3::PyAny>,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
-        if !format.is(&types::PRIVATE_FORMAT_PKCS8.get(py)?) {
+        if format != crate::serialization::PrivateFormat::PKCS8 {
             return Err(CryptographyError::from(
                 pyo3::exceptions::PyValueError::new_err(
                     "DH private keys support only PKCS8 serialization",
@@ -266,10 +312,10 @@ impl DHPublicKey {
     fn public_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PublicFormat,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
-        if !format.is(&types::PUBLIC_FORMAT_SUBJECT_PUBLIC_KEY_INFO.get(py)?) {
+        if format != crate::serialization::PublicFormat::SubjectPublicKeyInfo {
             return Err(CryptographyError::from(
                 pyo3::exceptions::PyValueError::new_err(
                     "DH public keys support only SubjectPublicKeyInfo serialization",
@@ -330,7 +376,7 @@ impl DHPublicKey {
 
 #[pyo3::pymethods]
 impl DHParameters {
-    #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+    #[cfg(not(CRYPTOGRAPHY_IS_BORINGSSL))]
     fn generate_private_key(&self) -> CryptographyResult<DHPrivateKey> {
         let dh = clone_dh(&self.dh)?.generate_key()?;
         Ok(DHPrivateKey {
@@ -359,13 +405,11 @@ impl DHParameters {
     fn parameter_bytes<'p>(
         &self,
         py: pyo3::Python<'p>,
-        encoding: pyo3::Bound<'p, pyo3::PyAny>,
-        format: pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::ParameterFormat,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
-        if !format.is(&types::PARAMETER_FORMAT_PKCS3.get(py)?) {
-            return Err(CryptographyError::from(
-                pyo3::exceptions::PyValueError::new_err("Only PKCS3 serialization is supported"),
-            ));
+        match format {
+            crate::serialization::ParameterFormat::PKCS3 => {}
         }
 
         let p_bytes = cryptography_openssl::utils::bn_to_big_endian_bytes(self.dh.prime_p())?;
@@ -386,7 +430,7 @@ impl DHParameters {
         } else {
             "X9.42 DH PARAMETERS"
         };
-        encode_der_data(py, tag.to_string(), data, &encoding)
+        encode_der_data(py, tag.to_string(), data, encoding)
     }
 }
 
@@ -426,7 +470,7 @@ impl DHPrivateNumbers {
         DHPrivateNumbers { x, public_numbers }
     }
 
-    #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+    #[cfg(not(CRYPTOGRAPHY_IS_BORINGSSL))]
     #[pyo3(signature = (backend=None))]
     fn private_key(
         &self,
@@ -471,7 +515,7 @@ impl DHPublicNumbers {
         }
     }
 
-    #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
+    #[cfg(not(CRYPTOGRAPHY_IS_BORINGSSL))]
     #[pyo3(signature = (backend=None))]
     fn public_key(
         &self,

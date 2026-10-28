@@ -120,6 +120,15 @@ pub(crate) fn encode_name_bytes<'p>(
     Ok(pyo3::types::PyBytes::new(py, &result))
 }
 
+#[pyo3::pyfunction]
+pub(crate) fn parse_name_bytes<'p>(
+    py: pyo3::Python<'p>,
+    data: &[u8],
+) -> CryptographyResult<pyo3::Bound<'p, pyo3::PyAny>> {
+    let name = asn1::parse_single::<NameReadable<'_>>(data)?;
+    parse_name(py, &name)
+}
+
 pub(crate) fn encode_general_names<'a>(
     py: pyo3::Python<'_>,
     ka_bytes: &'a cryptography_keepalive::KeepAlive<pyo3::pybacked::PyBackedBytes>,
@@ -225,7 +234,17 @@ fn parse_name_attribute<'p>(
             "Long-form tags are not supported in NameAttribute values",
         ))
     })?;
-    let py_tag = types::ASN1_TYPE_TO_ENUM.get(py)?.get_item(tag_val)?;
+    // A value whose tag is not one of the recognised string types is not a
+    // valid AttributeValue; surface it as a parse error rather than letting the
+    // dict lookup raise a bare KeyError.
+    let py_tag = types::ASN1_TYPE_TO_ENUM
+        .get(py)?
+        .get_item(tag_val)
+        .map_err(|_| {
+            asn1::ParseError::new(asn1::ParseErrorKind::UnexpectedTag {
+                actual: attribute.value.tag(),
+            })
+        })?;
     let py_data = match attribute.value {
         AttributeValue::AnyString(s) => {
             if s.tag() == asn1::BitString::TAG {
@@ -317,9 +336,9 @@ pub(crate) fn parse_general_name<'p>(
     Ok(py_gn)
 }
 
-pub(crate) fn parse_general_names<'a>(
+pub(crate) fn parse_general_names<'a, const MINIMUM_LEN: usize>(
     py: pyo3::Python<'a>,
-    gn_seq: &asn1::SequenceOf<'a, GeneralName<'a>>,
+    gn_seq: &asn1::SequenceOf<'a, GeneralName<'a>, MINIMUM_LEN>,
 ) -> CryptographyResult<pyo3::Bound<'a, pyo3::PyAny>> {
     let gns = pyo3::types::PyList::empty(py);
     for gn in gn_seq.clone() {
@@ -393,7 +412,7 @@ pub(crate) fn parse_and_cache_extensions<
                 Err(DuplicateExtensionsError(oid)) => {
                     let oid_obj = oid_to_py_oid(py, &oid)?;
                     return Err(exceptions::DuplicateExtension::new_err((
-                        format!("Duplicate {} extension found", &oid),
+                        format!("Duplicate {} extension found", oid),
                         oid_obj.unbind(),
                     )));
                 }

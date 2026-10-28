@@ -68,6 +68,7 @@ hazmat layer only when necessary.
     :caption: The recipes layer
 
     fernet
+    cobblestone
     x509/index
 
 .. toctree::
@@ -77,6 +78,7 @@ hazmat layer only when necessary.
     hazmat/primitives/index
     exceptions
     random-numbers
+    hazmat/asn1/index
     hazmat/decrepit/index
 
 .. toctree::

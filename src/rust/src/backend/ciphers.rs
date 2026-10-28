@@ -15,6 +15,7 @@ pub(crate) struct CipherContext {
     py_mode: pyo3::Py<pyo3::PyAny>,
     py_algorithm: pyo3::Py<pyo3::PyAny>,
     side: openssl::symm::Mode,
+    is_xts: bool,
 }
 
 impl CipherContext {
@@ -89,7 +90,8 @@ impl CipherContext {
             }
         }
 
-        if mode.is_instance(&types::XTS.get(py)?)? {
+        let is_xts = mode.is_instance(&types::XTS.get(py)?)?;
+        if is_xts {
             init_op(
                 &mut ctx,
                 None,
@@ -117,10 +119,11 @@ impl CipherContext {
             py_mode: mode.into(),
             py_algorithm: algorithm.into(),
             side,
+            is_xts,
         })
     }
 
-    fn reset_nonce(&mut self, py: pyo3::Python<'_>, nonce: CffiBuf<'_>) -> CryptographyResult<()> {
+    fn reset_nonce(&mut self, py: pyo3::Python<'_>, nonce: &[u8]) -> CryptographyResult<()> {
         if !self
             .py_mode
             .bind(py)
@@ -137,7 +140,7 @@ impl CipherContext {
                 )),
             ));
         }
-        if nonce.as_bytes().len() != self.ctx.iv_length() {
+        if nonce.len() != self.ctx.iv_length() {
             return Err(CryptographyError::from(
                 pyo3::exceptions::PyValueError::new_err(format!(
                     "Nonce must be {} bytes long",
@@ -149,7 +152,7 @@ impl CipherContext {
             openssl::symm::Mode::Encrypt => openssl::cipher_ctx::CipherCtxRef::encrypt_init,
             openssl::symm::Mode::Decrypt => openssl::cipher_ctx::CipherCtxRef::decrypt_init,
         };
-        init_op(&mut self.ctx, None, None, Some(nonce.as_bytes()))?;
+        init_op(&mut self.ctx, None, None, Some(nonce))?;
         Ok(())
     }
 
@@ -158,7 +161,18 @@ impl CipherContext {
         py: pyo3::Python<'p>,
         data: &[u8],
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
-        let mut buf = vec![0; data.len() + self.ctx.block_size()];
+        let block_size = self.ctx.block_size();
+        if block_size == 1 {
+            // Streaming modes always produce exactly data.len() bytes of
+            // output, so encrypt directly into the result PyBytes instead
+            // of into a zeroed scratch Vec that then gets copied.
+            return Ok(pyo3::types::PyBytes::new_with(py, data.len(), |b| {
+                let n = self.update_into(py, data, b)?;
+                assert_eq!(n, data.len());
+                Ok(())
+            })?);
+        }
+        let mut buf = vec![0; data.len() + block_size];
         let n = self.update_into(py, data, &mut buf)?;
         Ok(pyo3::types::PyBytes::new(py, &buf[..n]))
     }
@@ -177,12 +191,17 @@ impl CipherContext {
                 )),
             ));
         }
+        crate::buf::check_no_overlap(data, buf)?;
 
+        crate::backend::run_with_gil_detached(py, data.len(), || self.update_into_inner(data, buf))
+    }
+
+    fn update_into_inner(&mut self, data: &[u8], buf: &mut [u8]) -> CryptographyResult<usize> {
         let mut total_written = 0;
         for chunk in data.chunks(1 << 29) {
             // SAFETY: We ensure that outbuf is sufficiently large above.
             unsafe {
-                let n = if self.py_mode.bind(py).is_instance(&types::XTS.get(py)?)? {
+                let n = if self.is_xts {
                     self.ctx.cipher_update_unchecked(chunk, Some(&mut buf[total_written..])).map_err(|_| {
                     pyo3::exceptions::PyValueError::new_err(
                         "In XTS mode you must supply at least a full block in the first update call. For AES this is 16 bytes."
@@ -199,8 +218,14 @@ impl CipherContext {
         Ok(total_written)
     }
 
-    fn authenticate_additional_data(&mut self, data: &[u8]) -> CryptographyResult<()> {
-        self.ctx.cipher_update(data, None)?;
+    fn authenticate_additional_data(
+        &mut self,
+        py: pyo3::Python<'_>,
+        data: &[u8],
+    ) -> CryptographyResult<()> {
+        crate::backend::run_with_gil_detached(py, data.len(), || {
+            self.ctx.cipher_update(data, None)
+        })?;
         Ok(())
     }
 
@@ -209,12 +234,16 @@ impl CipherContext {
         py: pyo3::Python<'p>,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         let mut out_buf = vec![0; self.ctx.block_size()];
-        let n = self.ctx.cipher_final(&mut out_buf).or_else(|e| {
-            if e.errors().is_empty()
-                && self
-                    .py_mode
-                    .bind(py)
-                    .is_instance(&types::MODE_WITH_AUTHENTICATION_TAG.get(py)?)?
+        let n = self.ctx.cipher_final(&mut out_buf).or_else(|_| {
+            // For authenticated modes, the only way finalize can fail is a
+            // tag mismatch. Older OpenSSL versions (and BoringSSL, AWS-LC,
+            // and LibreSSL) leave the error queue empty in that case, while
+            // OpenSSL >= 4.1 pushes PROV_R_BAD_DECRYPT, so we can't key on
+            // the error queue.
+            if self
+                .py_mode
+                .bind(py)
+                .is_instance(&types::MODE_WITH_AUTHENTICATION_TAG.get(py)?)?
             {
                 return Err(CryptographyError::from(exceptions::InvalidTag::new_err(())));
             }
@@ -228,12 +257,61 @@ impl CipherContext {
     }
 }
 
+// ChaCha20 generates 64 bytes of keystream per 32-bit block counter value.
+const CHACHA20_BLOCK_SIZE: u64 = 64;
+
+// The 16-byte ChaCha20 nonce begins with a 32-bit little-endian block counter.
+// Encrypting more than `(2**32 - counter) * 64` bytes would overflow that
+// counter, at which point the OpenSSL implementation silently diverges from
+// RFC 7539 (the counter carries into the rest of the nonce), so we instead
+// refuse to encrypt past that point.
+fn chacha20_byte_limit(nonce: &[u8]) -> u64 {
+    let counter = u32::from_le_bytes(nonce[..4].try_into().unwrap());
+    ((1u64 << 32) - u64::from(counter)) * CHACHA20_BLOCK_SIZE
+}
+
+fn chacha20_initial_byte_limit(
+    py: pyo3::Python<'_>,
+    algorithm: &pyo3::Bound<'_, pyo3::PyAny>,
+) -> CryptographyResult<Option<u64>> {
+    if algorithm.is_instance(&types::CHACHA20.get(py)?)? {
+        let nonce = algorithm
+            .getattr(pyo3::intern!(py, "nonce"))?
+            .extract::<CffiBuf<'_>>()?;
+        Ok(Some(chacha20_byte_limit(nonce.as_bytes())))
+    } else {
+        Ok(None)
+    }
+}
+
 #[pyo3::pyclass(
     module = "cryptography.hazmat.bindings._rust.openssl.ciphers",
     name = "CipherContext"
 )]
 struct PyCipherContext {
     ctx: Option<CipherContext>,
+    // For ChaCha20 this tracks how many more bytes may be processed before the
+    // 32-bit block counter would overflow. `None` for all other ciphers.
+    bytes_remaining: Option<u64>,
+}
+
+impl PyCipherContext {
+    fn decrement_bytes_remaining(&mut self, n: usize) -> CryptographyResult<()> {
+        if let Some(remaining) = self.bytes_remaining {
+            self.bytes_remaining = Some(
+                remaining
+                    .checked_sub(u64::try_from(n).unwrap())
+                    .ok_or_else(|| {
+                        pyo3::exceptions::PyValueError::new_err(
+                            "Exceeded the maximum number of bytes that can be \
+                             encrypted with ChaCha20 for this nonce. The 32-bit \
+                             counter portion of the nonce would overflow.",
+                        )
+                    })?,
+            );
+        }
+        Ok(())
+    }
 }
 
 #[pyo3::pyclass(
@@ -270,11 +348,20 @@ impl PyCipherContext {
         py: pyo3::Python<'p>,
         data: CffiBuf<'_>,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
-        get_mut_ctx(self.ctx.as_mut())?.update(py, data.as_bytes())
+        let data = data.as_bytes();
+        self.decrement_bytes_remaining(data.len())?;
+        get_mut_ctx(self.ctx.as_mut())?.update(py, data)
     }
 
     fn reset_nonce(&mut self, py: pyo3::Python<'_>, nonce: CffiBuf<'_>) -> CryptographyResult<()> {
-        get_mut_ctx(self.ctx.as_mut())?.reset_nonce(py, nonce)
+        let nonce = nonce.as_bytes();
+        get_mut_ctx(self.ctx.as_mut())?.reset_nonce(py, nonce)?;
+        // The reset above validates the nonce length, so recompute the ChaCha20
+        // limit for the new counter only after it succeeds.
+        if self.bytes_remaining.is_some() {
+            self.bytes_remaining = Some(chacha20_byte_limit(nonce));
+        }
+        Ok(())
     }
 
     fn update_into(
@@ -283,7 +370,9 @@ impl PyCipherContext {
         data: CffiBuf<'_>,
         mut buf: CffiMutBuf<'_>,
     ) -> CryptographyResult<usize> {
-        get_mut_ctx(self.ctx.as_mut())?.update_into(py, data.as_bytes(), buf.as_mut_bytes())
+        let data = data.as_bytes();
+        self.decrement_bytes_remaining(data.len())?;
+        get_mut_ctx(self.ctx.as_mut())?.update_into(py, data, buf.as_mut_bytes())
     }
 
     fn finalize<'p>(
@@ -333,7 +422,11 @@ impl PyAEADEncryptionContext {
         get_mut_ctx(self.ctx.as_mut())?.update_into(py, data, buf.as_mut_bytes())
     }
 
-    fn authenticate_additional_data(&mut self, data: CffiBuf<'_>) -> CryptographyResult<()> {
+    fn authenticate_additional_data(
+        &mut self,
+        py: pyo3::Python<'_>,
+        data: CffiBuf<'_>,
+    ) -> CryptographyResult<()> {
         let ctx = get_mut_ctx(self.ctx.as_mut())?;
         if self.updated {
             return Err(CryptographyError::from(
@@ -348,7 +441,7 @@ impl PyAEADEncryptionContext {
             .ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err("Exceeded maximum AAD byte limit")
             })?;
-        ctx.authenticate_additional_data(data)
+        ctx.authenticate_additional_data(py, data)
     }
 
     fn finalize<'p>(
@@ -383,7 +476,7 @@ impl PyAEADEncryptionContext {
     }
 
     fn reset_nonce(&mut self, py: pyo3::Python<'_>, nonce: CffiBuf<'_>) -> CryptographyResult<()> {
-        get_mut_ctx(self.ctx.as_mut())?.reset_nonce(py, nonce)
+        get_mut_ctx(self.ctx.as_mut())?.reset_nonce(py, nonce.as_bytes())
     }
 }
 
@@ -424,7 +517,11 @@ impl PyAEADDecryptionContext {
         get_mut_ctx(self.ctx.as_mut())?.update_into(py, data, buf.as_mut_bytes())
     }
 
-    fn authenticate_additional_data(&mut self, data: CffiBuf<'_>) -> CryptographyResult<()> {
+    fn authenticate_additional_data(
+        &mut self,
+        py: pyo3::Python<'_>,
+        data: CffiBuf<'_>,
+    ) -> CryptographyResult<()> {
         let ctx = get_mut_ctx(self.ctx.as_mut())?;
         if self.updated {
             return Err(CryptographyError::from(
@@ -439,7 +536,7 @@ impl PyAEADDecryptionContext {
             .ok_or_else(|| {
                 pyo3::exceptions::PyValueError::new_err("Exceeded maximum AAD byte limit")
             })?;
-        ctx.authenticate_additional_data(data)
+        ctx.authenticate_additional_data(py, data)
     }
 
     fn finalize<'p>(
@@ -513,7 +610,7 @@ impl PyAEADDecryptionContext {
     }
 
     fn reset_nonce(&mut self, py: pyo3::Python<'_>, nonce: CffiBuf<'_>) -> CryptographyResult<()> {
-        get_mut_ctx(self.ctx.as_mut())?.reset_nonce(py, nonce)
+        get_mut_ctx(self.ctx.as_mut())?.reset_nonce(py, nonce.as_bytes())
     }
 }
 
@@ -523,6 +620,7 @@ fn create_encryption_ctx<'p>(
     algorithm: pyo3::Bound<'_, pyo3::PyAny>,
     mode: pyo3::Bound<'_, pyo3::PyAny>,
 ) -> CryptographyResult<pyo3::Bound<'p, pyo3::PyAny>> {
+    let bytes_remaining = chacha20_initial_byte_limit(py, &algorithm)?;
     let ctx = CipherContext::new(py, algorithm, mode.clone(), openssl::symm::Mode::Encrypt)?;
 
     if mode.is_instance(&types::MODE_WITH_AUTHENTICATION_TAG.get(py)?)? {
@@ -540,9 +638,12 @@ fn create_encryption_ctx<'p>(
         .into_pyobject(py)?
         .into_any())
     } else {
-        Ok(PyCipherContext { ctx: Some(ctx) }
-            .into_pyobject(py)?
-            .into_any())
+        Ok(PyCipherContext {
+            ctx: Some(ctx),
+            bytes_remaining,
+        }
+        .into_pyobject(py)?
+        .into_any())
     }
 }
 
@@ -552,6 +653,7 @@ fn create_decryption_ctx<'p>(
     algorithm: pyo3::Bound<'_, pyo3::PyAny>,
     mode: pyo3::Bound<'_, pyo3::PyAny>,
 ) -> CryptographyResult<pyo3::Bound<'p, pyo3::PyAny>> {
+    let bytes_remaining = chacha20_initial_byte_limit(py, &algorithm)?;
     let mut ctx = CipherContext::new(py, algorithm, mode.clone(), openssl::symm::Mode::Decrypt)?;
 
     if mode.is_instance(&types::MODE_WITH_AUTHENTICATION_TAG.get(py)?)? {
@@ -575,9 +677,12 @@ fn create_decryption_ctx<'p>(
         .into_pyobject(py)?
         .into_any())
     } else {
-        Ok(PyCipherContext { ctx: Some(ctx) }
-            .into_pyobject(py)?
-            .into_any())
+        Ok(PyCipherContext {
+            ctx: Some(ctx),
+            bytes_remaining,
+        }
+        .into_pyobject(py)?
+        .into_any())
     }
 }
 

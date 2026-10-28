@@ -138,19 +138,6 @@ impl<'a> DNSPattern<'a> {
             },
         }
     }
-
-    /// Returns the inner `DNSName` within this `DNSPattern`, e.g.
-    /// `foo.com` for `*.foo.com` or `example.com` for `example.com`.
-    ///
-    /// This API must not be used to bypass pattern matching; it exists
-    /// solely to enable checks that only require the inner name, such
-    /// as Name Constraint checks.
-    pub fn inner_name(&self) -> &DNSName<'a> {
-        match self {
-            DNSPattern::Exact(dnsname) => dnsname,
-            DNSPattern::Wildcard(dnsname) => dnsname,
-        }
-    }
 }
 
 /// A `DNSConstraint` represents a DNS name constraint as defined in [RFC 5280 4.2.1.10].
@@ -163,22 +150,13 @@ impl<'a> DNSConstraint<'a> {
         DNSName::new(pattern).map(Self)
     }
 
-    /// Returns true if this `DNSConstraint` matches the given name.
+    /// Returns true if the given exact `DNSName` falls within this
+    /// constraint's subtree.
     ///
-    /// Constraint matching is defined by RFC 5280: any DNS name that can
-    /// be constructed by simply adding zero or more labels to the left-hand
-    /// side of the name satisfies the name constraint.
-    ///
-    /// ```rust
-    /// # use cryptography_x509_verification::types::{DNSConstraint, DNSName};
-    /// let example_com = DNSName::new("example.com").unwrap();
-    /// let badexample_com = DNSName::new("badexample.com").unwrap();
-    /// let foo_example_com = DNSName::new("foo.example.com").unwrap();
-    /// assert!(DNSConstraint::new(example_com.as_str()).unwrap().matches(&example_com));
-    /// assert!(DNSConstraint::new(example_com.as_str()).unwrap().matches(&foo_example_com));
-    /// assert!(!DNSConstraint::new(example_com.as_str()).unwrap().matches(&badexample_com));
-    /// ```
-    pub fn matches(&self, name: &DNSName<'_>) -> bool {
+    /// Per RFC 5280, a name satisfies the constraint if it can be constructed
+    /// by adding zero or more labels to the left-hand side of the constraint's
+    /// name (i.e. it is the constraint's name, or a subdomain of it).
+    fn contains(&self, name: &DNSName<'_>) -> bool {
         // NOTE: This may seem like an obtuse way to perform label matching,
         // but it saves us a few allocations: doing a substring check instead
         // would require us to clone each string and do case normalization.
@@ -192,6 +170,50 @@ impl<'a> DNSConstraint<'a> {
                 .rlabels()
                 .zip(name.rlabels())
                 .all(|(a, o)| a.eq_ignore_ascii_case(o))
+    }
+
+    /// Returns true if the given `DNSPattern` is permitted by this constraint,
+    /// for use with a `permittedSubtrees` name constraint.
+    ///
+    /// A pattern is permitted only if *every* name it can represent falls
+    /// within the constraint's subtree. An exact name is permitted by ordinary
+    /// subtree containment (per RFC 5280).
+    ///
+    /// Wildcard patterns are not covered by RFC 5280; we define their behavior
+    /// here. A wildcard pattern `*.X` is permitted only if its base name `X`
+    /// itself falls within the constraint's subtree. This is stricter than
+    /// mere overlap: `*.example.com` is *not* permitted by `foo.example.com`,
+    /// since it can also expand to a sibling such as `bar.example.com` that
+    /// lies outside the permitted subtree.
+    pub fn permits(&self, pattern: &DNSPattern<'_>) -> bool {
+        match pattern {
+            DNSPattern::Exact(name) => self.contains(name),
+            DNSPattern::Wildcard(base) => self.contains(base),
+        }
+    }
+
+    /// Returns true if the given `DNSPattern` is excluded by this constraint,
+    /// for use with an `excludedSubtrees` name constraint.
+    ///
+    /// A pattern is excluded if *any* name it can represent falls within the
+    /// constraint's subtree. An exact name is excluded by ordinary subtree
+    /// containment (per RFC 5280).
+    ///
+    /// Wildcard patterns are not covered by RFC 5280; we define their behavior
+    /// here. A wildcard pattern `*.X` is excluded if it overlaps the subtree
+    /// at all, which happens in two subtly distinct cases:
+    ///
+    /// 1. The constraint is more specific than the wildcard, e.g. constraint
+    ///    `bar.example.com` and pattern `*.example.com` (which can expand to
+    ///    `bar.example.com`). This is handled by `DNSPattern::matches`.
+    /// 2. The wildcard's base name falls within the subtree, e.g. constraint
+    ///    `example.com` and pattern `*.example.com`. This is handled by
+    ///    `DNSConstraint::contains`.
+    pub fn excludes(&self, pattern: &DNSPattern<'_>) -> bool {
+        match pattern {
+            DNSPattern::Exact(name) => self.contains(name),
+            DNSPattern::Wildcard(base) => pattern.matches(&self.0) || self.contains(base),
+        }
     }
 }
 
@@ -593,18 +615,69 @@ mod tests {
     }
 
     #[test]
-    fn test_dnsconstraint_matches() {
+    fn test_dnsconstraint_exact() {
         let example_com = DNSConstraint::new("example.com").unwrap();
 
-        // Exact domain and arbitrary subdomains match.
-        assert!(example_com.matches(&DNSName::new("example.com").unwrap()));
-        assert!(example_com.matches(&DNSName::new("foo.example.com").unwrap()));
-        assert!(example_com.matches(&DNSName::new("foo.bar.baz.quux.example.com").unwrap()));
+        // For exact patterns, `permits` and `excludes` behave identically:
+        // the pattern must fall within the constraint's subtree.
+        for permitted in [
+            "example.com",
+            "foo.example.com",
+            "foo.bar.baz.quux.example.com",
+        ] {
+            let pattern = DNSPattern::new(permitted).unwrap();
+            assert!(example_com.permits(&pattern));
+            assert!(example_com.excludes(&pattern));
+        }
 
         // Parent domains, distinct domains, and substring domains do not match.
-        assert!(!example_com.matches(&DNSName::new("com").unwrap()));
-        assert!(!example_com.matches(&DNSName::new("badexample.com").unwrap()));
-        assert!(!example_com.matches(&DNSName::new("wrong.com").unwrap()));
+        for rejected in ["com", "badexample.com", "wrong.com"] {
+            let pattern = DNSPattern::new(rejected).unwrap();
+            assert!(!example_com.permits(&pattern));
+            assert!(!example_com.excludes(&pattern));
+        }
+    }
+
+    #[test]
+    fn test_dnsconstraint_permits_wildcard() {
+        let com = DNSConstraint::new("com").unwrap();
+        let example_com = DNSConstraint::new("example.com").unwrap();
+        let foo_example_com = DNSConstraint::new("foo.example.com").unwrap();
+        let any_example_com = DNSPattern::new("*.example.com").unwrap();
+
+        // A wildcard `*.example.com` is permitted only by constraints whose
+        // subtree contains *every* name the wildcard can expand to, i.e. those
+        // that contain `example.com` itself.
+        assert!(com.permits(&any_example_com));
+        assert!(example_com.permits(&any_example_com));
+
+        // A constraint more specific than the wildcard's base does *not*
+        // permit it: the wildcard can expand to siblings outside the subtree
+        // (e.g. `*.example.com` can be `bar.example.com`, which lies outside
+        // `foo.example.com`).
+        assert!(!foo_example_com.permits(&any_example_com));
+    }
+
+    #[test]
+    fn test_dnsconstraint_excludes_wildcard() {
+        let com = DNSConstraint::new("com").unwrap();
+        let example_com = DNSConstraint::new("example.com").unwrap();
+        let bar_example_com = DNSConstraint::new("bar.example.com").unwrap();
+        let baz_bar_example_com = DNSConstraint::new("baz.bar.example.com").unwrap();
+        let any_example_com = DNSPattern::new("*.example.com").unwrap();
+
+        // A wildcard `*.example.com` is excluded by any constraint whose
+        // subtree it overlaps, including constraints more specific than the
+        // wildcard's base.
+        assert!(com.excludes(&any_example_com));
+        assert!(example_com.excludes(&any_example_com));
+        assert!(bar_example_com.excludes(&any_example_com));
+
+        // A constraint on `baz.bar.example.com` doesn't overlap
+        // `*.example.com`, since `baz.bar.example.com` matches zero or more
+        // sublabels of `baz.bar.example.com` while `*.example.com` matches
+        // exactly one sublabel of `example.com`.
+        assert!(!baz_bar_example_com.excludes(&any_example_com));
     }
 
     #[test]

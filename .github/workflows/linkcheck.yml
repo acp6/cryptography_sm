@@ -20,22 +20,23 @@ jobs:
     name: "linkcheck"
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Setup python
         id: setup-python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
-          python-version: 3.11
+          version-file: ci-constraints-requirements.txt
+          python-version: "3.11"
+          activate-environment: true
+          cache-dependency-glob: ci-constraints-requirements.txt
       - name: Cache rust and pip
         uses: ./.github/actions/cache
         timeout-minutes: 2
         with:
-          # This creates the same key as the docs job (as long as they have the same
-          # python version)
-          key: 3.11-${{ steps.setup-python.outputs.python-version }}
-      - run: python -m pip install -c ci-constraints-requirements.txt 'nox[uv]'
+          key: ${{ steps.setup-python.outputs.python-runtime-id }}
+      - run: uv pip install -c ci-constraints-requirements.txt 'nox[uv]'
       - name: Build nox environment
         run: |
             nox -v --install-only -s docs-linkcheck

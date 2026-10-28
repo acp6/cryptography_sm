@@ -106,7 +106,7 @@ pub(crate) fn symmetric_encrypt(
     let n = cipher.update_into(py, data, &mut ciphertext)?;
 
     let mut padder = PKCS7PaddingContext::new(block_size);
-    assert!(padder.update(CffiBuf::from_bytes(py, data))?.is_none());
+    assert!(padder.update(py, CffiBuf::from_bytes(py, data))?.is_none());
     let padding = padder.finalize(py)?;
 
     let pad_n = cipher.update_into(py, padding.as_bytes(), &mut ciphertext[n..])?;
@@ -215,7 +215,8 @@ fn decode_encryption_algorithm<'a>(
     } else if encryption_algorithm.is_instance(&types::ENCRYPTION_BUILDER.get(py)?)?
         && encryption_algorithm
             .getattr(pyo3::intern!(py, "_format"))?
-            .is(&types::PRIVATE_FORMAT_PKCS12.get(py)?)
+            .extract::<crate::serialization::PrivateFormat>()?
+            == crate::serialization::PrivateFormat::PKCS12
     {
         let key_cert_alg =
             encryption_algorithm.getattr(pyo3::intern!(py, "_key_cert_algorithm"))?;
@@ -377,7 +378,7 @@ fn serialize_safebags<'p>(
     )?;
     let mac_digest = {
         let mut h = hmac::Hmac::new_bytes(py, &mac_key, &encryption_details.mac_algorithm)?;
-        h.update_bytes(&auth_safe_content)?;
+        h.update_bytes(py, &auth_safe_content)?;
         h.finalize(py)?
     };
     let mac_algorithm_identifier = crate::x509::ocsp::HASH_NAME_TO_ALGORITHM_IDENTIFIERS
@@ -493,14 +494,16 @@ fn serialize_key_and_certificates<'p>(
     }
 
     if let Some(key) = key {
-        let der = types::ENCODING_DER.get(py)?;
-        let pkcs8 = types::PRIVATE_FORMAT_PKCS8.get(py)?;
         let no_encryption = types::NO_ENCRYPTION.get(py)?.call0()?;
 
         pkcs8_bytes = key
             .call_method1(
                 pyo3::intern!(py, "private_bytes"),
-                (der, pkcs8, no_encryption),
+                (
+                    crate::serialization::Encoding::DER,
+                    crate::serialization::PrivateFormat::PKCS8,
+                    no_encryption,
+                ),
             )?
             .extract::<pyo3::pybacked::PyBackedBytes>()?;
 
@@ -569,13 +572,15 @@ fn decode_p12(
         // same.
         ""
     };
-    let parsed = p12
-        .parse2(password)
+    // PKCS12_parse runs the MAC and PBE KDFs for however many iterations
+    // the bundle specifies, which can take a while, so don't hold the GIL.
+    let parsed = py
+        .detach(|| p12.parse2(password))
         .map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid password or PKCS12 data"))?;
 
     if let Err(e) = asn1::parse_single::<cryptography_x509::pkcs12::Pfx<'_>>(data.as_bytes()) {
         let warning_cls = pyo3::exceptions::PyUserWarning::type_object(py);
-        let message = std::ffi::CString::new(format!("PKCS#12 bundle could not be parsed as DER, falling back to parsing as BER. Please file an issue at https://github.com/pyca/cryptography/issues explaining how your PKCS#12 bundle was created. In the future, this may become an exception. Error details: {e}")).unwrap();
+        let message = std::ffi::CString::new(format!("PKCS#12 bundle could not be parsed as DER, falling back to parsing as BER. In the future, this may become an exception. Error details: {e}")).unwrap();
         pyo3::PyErr::warn(py, &warning_cls, &message, 1)?;
     }
 

@@ -51,7 +51,7 @@ static OIDS_TO_MIC_NAME: LazyLock<HashMap<&asn1::ObjectIdentifier, &str>> = Lazy
 fn serialize_certificates<'p>(
     py: pyo3::Python<'p>,
     py_certs: Vec<pyo3::PyRef<'p, x509::certificate::Certificate>>,
-    encoding: &pyo3::Bound<'p, pyo3::PyAny>,
+    encoding: crate::serialization::Encoding,
 ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
     if py_certs.is_empty() {
         return Err(pyo3::exceptions::PyTypeError::new_err(
@@ -93,7 +93,7 @@ fn encrypt_and_serialize<'p>(
     py: pyo3::Python<'p>,
     builder: &pyo3::Bound<'p, pyo3::PyAny>,
     content_encryption_algorithm: &pyo3::Bound<'p, pyo3::PyAny>,
-    encoding: &pyo3::Bound<'p, pyo3::PyAny>,
+    encoding: crate::serialization::Encoding,
     options: &pyo3::Bound<'p, pyo3::types::PyList>,
 ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
     let raw_data: CffiBuf<'p> = builder.getattr(pyo3::intern!(py, "_data"))?.extract()?;
@@ -131,6 +131,7 @@ fn encrypt_and_serialize<'p>(
     for cert in py_recipients.iter() {
         // Currently, keys are encrypted with RSA (PKCS #1 v1.5), which the S/MIME v3.2 RFC
         // specifies as MUST support (https://datatracker.ietf.org/doc/html/rfc5751#section-2.3)
+        // however rest of S/MIME v3.2 is not currently supported
         let encrypted_key = cert
             .call_method0(pyo3::intern!(py, "public_key"))?
             .call_method1(pyo3::intern!(py, "encrypt"), (&key, &padding))?
@@ -179,7 +180,7 @@ fn encrypt_and_serialize<'p>(
     };
     let ci_bytes = asn1::write_single(&content_info)?;
 
-    if encoding.is(&types::ENCODING_SMIME.get(py)?) {
+    if encoding == crate::serialization::Encoding::SMIME {
         Ok(types::SMIME_ENVELOPED_ENCODE
             .get(py)?
             .call1((&*ci_bytes,))?
@@ -270,47 +271,16 @@ fn decrypt_der<'p>(
                 }
             };
 
-            // Raise error when the key encryption algorithm is not RSA
-            let key = match recipient_info.key_encryption_algorithm.oid() {
-                &oid::RSA_OID => {
-                    let padding = types::PKCS1V15.get(py)?.call0()?;
-                    private_key
-                        .call_method1(
-                            pyo3::intern!(py, "decrypt"),
-                            (recipient_info.encrypted_key, &padding),
-                        )?
-                        .extract::<pyo3::pybacked::PyBackedBytes>()?
-                }
-                _ => {
-                    return Err(CryptographyError::from(
-                        exceptions::UnsupportedAlgorithm::new_err((
-                            "Only RSA with PKCS #1 v1.5 padding is currently supported for key decryption.",
-                            exceptions::Reasons::UNSUPPORTED_SERIALIZATION,
-                        )),
-                    ));
-                }
-            };
-
             // The function can decrypt content encrypted with AES-128-CBC, which the S/MIME v3.2
             // RFC specifies as MUST support, and AES-256-CBC, which is specified as SHOULD+
             // support. More info: https://datatracker.ietf.org/doc/html/rfc5751#section-2.7
-            // TODO: implement the possible algorithms from S/MIME 3.2 (and 4.0?)
+            // however rest of S/MIME v3.2 is not currently supported
             let algorithm_identifier = enveloped_data
                 .encrypted_content_info
                 .content_encryption_algorithm;
-            let (algorithm, mode) = match algorithm_identifier.params {
-                AlgorithmParameters::Aes128Cbc(iv) => (
-                    types::AES128.get(py)?.call1((key,))?,
-                    types::CBC
-                        .get(py)?
-                        .call1((pyo3::types::PyBytes::new(py, &iv),))?,
-                ),
-                AlgorithmParameters::Aes256Cbc(iv) => (
-                    types::AES256.get(py)?.call1((key,))?,
-                    types::CBC
-                        .get(py)?
-                        .call1((pyo3::types::PyBytes::new(py, &iv),))?,
-                ),
+            let (algorithm_type, key_size, iv) = match algorithm_identifier.params {
+                AlgorithmParameters::Aes128Cbc(iv) => (&types::AES128, 16, iv),
+                AlgorithmParameters::Aes256Cbc(iv) => (&types::AES256, 32, iv),
                 _ => {
                     return Err(CryptographyError::from(
                         exceptions::UnsupportedAlgorithm::new_err((
@@ -320,6 +290,50 @@ fn decrypt_der<'p>(
                     ));
                 }
             };
+
+            // Raise error when the key encryption algorithm is not RSA
+            if recipient_info.key_encryption_algorithm.oid() != &oid::RSA_OID {
+                return Err(CryptographyError::from(
+                    exceptions::UnsupportedAlgorithm::new_err((
+                        "Only RSA with PKCS #1 v1.5 padding is currently supported for key decryption.",
+                        exceptions::Reasons::UNSUPPORTED_SERIALIZATION,
+                    )),
+                ));
+            }
+
+            // Unwrap the content encryption key. RFC 3218 requires that a
+            // failure to recover a usable key is not distinguishable from
+            // recovering a key that simply isn't the right one -- otherwise
+            // this becomes a Bleichenbacher oracle for anything that decrypts
+            // attacker-supplied data. We substitute a random key of the
+            // expected size, so that every failure surfaces as the same
+            // content decryption error.
+            let padding = types::PKCS1V15.get(py)?.call0()?;
+            let random_key = crate::backend::rand::get_rand_bytes(py, key_size)?;
+            let key = match private_key.call_method1(
+                pyo3::intern!(py, "decrypt"),
+                (recipient_info.encrypted_key, &padding),
+            ) {
+                Ok(key) => {
+                    let key = key.extract::<pyo3::Bound<'_, pyo3::types::PyBytes>>()?;
+                    if key.as_bytes().len() == key_size {
+                        key
+                    } else {
+                        random_key
+                    }
+                }
+                // A ValueError here is entirely attacker controlled (invalid
+                // padding, or an encrypted key of the wrong length) and must
+                // stay silent. Any other exception reflects a caller mistake
+                // rather than the contents of the message.
+                Err(e) if e.is_instance_of::<pyo3::exceptions::PyValueError>(py) => random_key,
+                Err(e) => return Err(e.into()),
+            };
+
+            let algorithm = algorithm_type.get(py)?.call1((key,))?;
+            let mode = types::CBC
+                .get(py)?
+                .call1((pyo3::types::PyBytes::new(py, &iv),))?;
 
             // Decrypt the content using the key and proper algorithm
             let encrypted_content = match enveloped_data.encrypted_content_info.encrypted_content {
@@ -461,7 +475,7 @@ pub(crate) fn symmetric_decrypt(
 fn sign_and_serialize<'p>(
     py: pyo3::Python<'p>,
     builder: &pyo3::Bound<'p, pyo3::PyAny>,
-    encoding: &pyo3::Bound<'p, pyo3::PyAny>,
+    encoding: crate::serialization::Encoding,
     options: &pyo3::Bound<'p, pyo3::types::PyList>,
 ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
     let raw_data: CffiBuf<'p> = builder.getattr(pyo3::intern!(py, "_data"))?.extract()?;
@@ -640,7 +654,7 @@ fn sign_and_serialize<'p>(
     };
     let ci_bytes = asn1::write_single(&content_info)?;
 
-    if encoding.is(&types::ENCODING_SMIME.get(py)?) {
+    if encoding == crate::serialization::Encoding::SMIME {
         let mic_algs = digest_algs
             .iter()
             .map(|d| OIDS_TO_MIC_NAME[&d.oid()])
@@ -769,6 +783,9 @@ where
             x509::certificate::Certificate {
                 raw: raw_cert,
                 cached_extensions: pyo3::sync::PyOnceLock::new(),
+                cached_issuer: pyo3::sync::PyOnceLock::new(),
+                cached_subject: pyo3::sync::PyOnceLock::new(),
+                cached_public_key: pyo3::sync::PyOnceLock::new(),
             },
         )?)?;
 
@@ -842,7 +859,7 @@ fn load_der_pkcs7_certificates(
             if let Err(e) =  load_pkcs7_certificates_rust(py, data) {
                 let err = pyo3::PyErr::from(e);
                 let warning_cls = pyo3::exceptions::PyUserWarning::type_object(py);
-                let message = CString::new(format!("PKCS#7 certificates could not be parsed as DER, falling back to parsing as BER. Please file an issue at https://github.com/pyca/cryptography/issues explaining how your PKCS#7 certificates were created. In the future, this may become an exception. Error details: {err}")).unwrap();
+                let message = CString::new(format!("PKCS#7 certificates could not be parsed as DER, falling back to parsing as BER. In the future, this may become an exception. Error details: {err}")).unwrap();
                 pyo3::PyErr::warn(py, &warning_cls, &message, 1)?;
             }
 

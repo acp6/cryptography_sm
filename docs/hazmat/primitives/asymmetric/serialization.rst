@@ -216,6 +216,10 @@ all begin with ``-----BEGIN {format}-----`` and end with ``-----END
 .. function:: load_pem_parameters(data)
     .. versionadded:: 2.0
 
+    .. deprecated:: 50.0.0
+        Diffie-Hellman over finite fields (FFDH) is deprecated and support
+        will be removed in a future release.
+
     Deserialize parameters from PEM encoded data to one of the supported
     asymmetric parameters types.
 
@@ -344,6 +348,10 @@ the rest.
 
     .. versionadded:: 2.0
 
+    .. deprecated:: 50.0.0
+        Diffie-Hellman over finite fields (FFDH) is deprecated and support
+        will be removed in a future release.
+
     Deserialize parameters from DER encoded data to one of the supported
     asymmetric parameters types.
 
@@ -438,8 +446,8 @@ DSA keys look almost identical but begin with ``ssh-dss`` rather than
     :param key: The public key to compute the fingerprint for.
     :type key: One of :data:`SSHPublicKeyTypes`
 
-    :param hash_algorithm: The hash algorithm to use, either ``MD5()`` or
-        ``SHA256()``.
+    :param hash_algorithm: The hash algorithm to use, either ``MD5()``,
+        ``SHA1()``, or ``SHA256()``.
 
     :return: The key fingerprint.
     :rtype: bytes
@@ -1266,8 +1274,8 @@ contain certificates, CRLs, and much more. PKCS7 files commonly have a ``p7b``,
 
     The PKCS7 signature builder can create both basic PKCS7 signed messages as
     well as S/MIME messages, which are commonly used in email. S/MIME has
-    multiple versions, but this implements a subset of :rfc:`2632`, also known
-    as S/MIME Version 3.
+    multiple versions, most of this implementation follows S/MIME 2.0 (RFC 2311).
+    Only a small subset of :rfc:`2632`, also known as S/MIME version 3 is supported.
 
     .. versionadded:: 3.2
 
@@ -1344,8 +1352,8 @@ contain certificates, CRLs, and much more. PKCS7 files commonly have a ``p7b``,
 
     The PKCS7 envelope builder can create encrypted S/MIME messages,
     which are commonly used in email. S/MIME has multiple versions,
-    but this implements a subset of :rfc:`5751`, also known as S/MIME
-    Version 3.2.
+    most of this implementation follows S/MIME 2.0 (RFC 2311).
+    Only a small subset of :rfc:`2632`, also known as S/MIME version 3 is supported.
 
     .. versionadded:: 43.0.0
 
@@ -1434,7 +1442,17 @@ contain certificates, CRLs, and much more. PKCS7 files commonly have a ``p7b``,
         b'data to encrypt'
 
     Deserialize and decrypt a DER-encoded PKCS7 message. PKCS7 (or S/MIME) has multiple versions,
-    but this supports a subset of :rfc:`5751`, also known as S/MIME Version 3.2.
+    most of this implementation follows S/MIME 2.0 (RFC 2311). A small subset of :rfc:`2632`,
+    also known as S/MIME version 3 is supported.
+
+    .. warning::
+
+        ``EnvelopedData`` does not authenticate its content. An application
+        that decrypts attacker-supplied messages and reveals whether
+        decryption succeeded -- through an error, a status code, or timing --
+        gives the attacker a CBC padding oracle sufficient to recover the
+        plaintext. This is a property of PKCS#7 and cannot be fixed here,
+        so avoid decrypting untrusted ``EnvelopedData``.
 
     :param data: The data, encoded in DER format.
     :type data: bytes
@@ -1489,8 +1507,15 @@ contain certificates, CRLs, and much more. PKCS7 files commonly have a ``p7b``,
         >>> pkcs7.pkcs7_decrypt_pem(enveloped, cert, key, options)
         b'data to encrypt'
 
-    Deserialize and decrypt a PEM-encoded PKCS7E message. PKCS7 (or S/MIME) has multiple versions,
-    but this supports a subset of :rfc:`5751`, also known as S/MIME Version 3.2.
+    Deserialize and decrypt a PEM-encoded PKCS7 message. PKCS7 (or S/MIME) has multiple versions,
+    most of this implementation follows S/MIME 2.0 (RFC 2311). A small subset of :rfc:`2632`,
+    also known as S/MIME version 3 is supported.
+
+    .. warning::
+
+        The padding oracle described in
+        :func:`~cryptography.hazmat.primitives.serialization.pkcs7.pkcs7_decrypt_der`
+        applies equally here.
 
     :param data: The data, encoded in PEM format.
     :type data: bytes
@@ -1547,7 +1572,14 @@ contain certificates, CRLs, and much more. PKCS7 files commonly have a ``p7b``,
         b'data to encrypt'
 
     Deserialize and decrypt a S/MIME-encoded PKCS7 message. PKCS7 (or S/MIME) has multiple versions,
-    but this supports a subset of :rfc:`5751`, also known as S/MIME Version 3.2.
+    most of this implementation follows S/MIME 2.0 (RFC 2311). A small subset of :rfc:`2632`,
+    also known as S/MIME version 3 is supported.
+
+    .. warning::
+
+        The padding oracle described in
+        :func:`~cryptography.hazmat.primitives.serialization.pkcs7.pkcs7_decrypt_der`
+        applies equally here.
 
     :param data: The data. It should be in S/MIME format, meaning MIME with content type
         ``application/pkcs7-mime`` or ``application/x-pkcs7-mime``.

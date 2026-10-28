@@ -7,6 +7,7 @@ import binascii
 import mmap
 import os
 import sys
+import typing
 
 import pytest
 
@@ -48,7 +49,7 @@ def large_mmap(length: int = 2**32):
     _aead_supported(ChaCha20Poly1305),
     reason="Requires OpenSSL without ChaCha20Poly1305 support",
 )
-def test_chacha20poly1305_unsupported_on_older_openssl(backend):
+def test_chacha20poly1305_unsupported_on_older_openssl():
     with raises_unsupported_algorithm(_Reasons.UNSUPPORTED_CIPHER):
         ChaCha20Poly1305(ChaCha20Poly1305.generate_key())
 
@@ -79,9 +80,9 @@ class TestChaCha20Poly1305:
         key = ChaCha20Poly1305.generate_key()
         assert len(key) == 32
 
-    def test_bad_key(self, backend):
+    def test_bad_key(self):
         with pytest.raises(TypeError):
-            ChaCha20Poly1305(object())  # type:ignore[arg-type]
+            ChaCha20Poly1305(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             ChaCha20Poly1305(b"0" * 31)
@@ -94,9 +95,7 @@ class TestChaCha20Poly1305:
             [b"0" * 12, b"data", object()],
         ],
     )
-    def test_params_not_bytes_encrypt(
-        self, nonce, data, associated_data, backend
-    ):
+    def test_params_not_bytes_encrypt(self, nonce, data, associated_data):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         with pytest.raises(TypeError):
@@ -105,7 +104,7 @@ class TestChaCha20Poly1305:
         with pytest.raises(TypeError):
             chacha.decrypt(nonce, data, associated_data)
 
-    def test_nonce_not_12_bytes(self, backend):
+    def test_nonce_not_12_bytes(self):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         with pytest.raises(ValueError):
@@ -122,7 +121,7 @@ class TestChaCha20Poly1305:
             buf = bytearray(1)
             chacha.decrypt_into(b"00", b"hello", b"", buf)
 
-    def test_decrypt_data_too_short(self, backend):
+    def test_decrypt_data_too_short(self):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         with pytest.raises(InvalidTag):
@@ -132,7 +131,7 @@ class TestChaCha20Poly1305:
             buf = bytearray(16)
             chacha.decrypt_into(b"0" * 12, b"0", None, buf)
 
-    def test_associated_data_none_equal_to_empty_bytestring(self, backend):
+    def test_associated_data_none_equal_to_empty_bytestring(self):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         nonce = os.urandom(12)
@@ -143,7 +142,7 @@ class TestChaCha20Poly1305:
         pt2 = chacha.decrypt(nonce, ct2, b"")
         assert pt1 == pt2
 
-    def test_openssl_vectors(self, subtests, backend):
+    def test_openssl_vectors(self, subtests):
         vectors = load_vectors_from_file(
             os.path.join("ciphers", "ChaCha20Poly1305", "openssl.txt"),
             load_nist_vectors,
@@ -166,7 +165,7 @@ class TestChaCha20Poly1305:
                     computed_ct = chacha.encrypt(nonce, pt, aad)
                     assert computed_ct == ct + tag
 
-    def test_boringssl_vectors(self, subtests, backend):
+    def test_boringssl_vectors(self, subtests):
         vectors = load_vectors_from_file(
             os.path.join("ciphers", "ChaCha20Poly1305", "boringssl.txt"),
             load_nist_vectors,
@@ -191,7 +190,7 @@ class TestChaCha20Poly1305:
                 computed_ct = chacha.encrypt(nonce, pt, aad)
                 assert computed_ct == ct + tag
 
-    def test_buffer_protocol(self, backend):
+    def test_buffer_protocol(self):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         pt = b"encrypt me"
@@ -206,7 +205,7 @@ class TestChaCha20Poly1305:
         computed_pt2 = chacha2.decrypt(bytearray(nonce), ct2, ad)
         assert computed_pt2 == pt
 
-    def test_encrypt_into(self, backend):
+    def test_encrypt_into(self):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         nonce = os.urandom(12)
@@ -221,7 +220,7 @@ class TestChaCha20Poly1305:
     @pytest.mark.parametrize(
         ("ptlen", "buflen"), [(10, 25), (10, 27), (15, 30), (20, 37)]
     )
-    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen, backend):
+    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         nonce = os.urandom(12)
@@ -230,7 +229,7 @@ class TestChaCha20Poly1305:
         with pytest.raises(ValueError, match="buffer must be"):
             chacha.encrypt_into(nonce, pt, None, buf)
 
-    def test_decrypt_into(self, backend):
+    def test_decrypt_into(self):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         nonce = os.urandom(12)
@@ -245,7 +244,7 @@ class TestChaCha20Poly1305:
     @pytest.mark.parametrize(
         ("ctlen", "buflen"), [(26, 9), (26, 11), (31, 14), (36, 21)]
     )
-    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen, backend):
+    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         nonce = os.urandom(12)
@@ -254,7 +253,7 @@ class TestChaCha20Poly1305:
         with pytest.raises(ValueError, match="buffer must be"):
             chacha.decrypt_into(nonce, ct, None, buf)
 
-    def test_decrypt_into_invalid_tag(self, backend):
+    def test_decrypt_into_invalid_tag(self):
         key = ChaCha20Poly1305.generate_key()
         chacha = ChaCha20Poly1305(key)
         nonce = os.urandom(12)
@@ -267,6 +266,31 @@ class TestChaCha20Poly1305:
         buf = bytearray(len(pt))
         with pytest.raises(InvalidTag):
             chacha.decrypt_into(nonce, bytes(corrupted_ct), ad, buf)
+
+    @pytest.mark.parametrize("offset", [0, 1, 12, 16])
+    def test_encrypt_into_overlapping_buffer(self, offset):
+        key = ChaCha20Poly1305.generate_key()
+        chacha = ChaCha20Poly1305(key)
+        nonce = os.urandom(12)
+        pt = os.urandom(1000)
+        ad = b"additional"
+        ct = chacha.encrypt(nonce, pt, ad)
+
+        buf = bytearray(offset + len(pt) + 16)
+        buf[: len(pt)] = pt
+        with pytest.raises(ValueError, match="must not overlap"):
+            chacha.encrypt_into(
+                nonce, memoryview(buf)[: len(pt)], ad, memoryview(buf)[offset:]
+            )
+
+        buf = bytearray(ct + bytes(offset))
+        with pytest.raises(ValueError, match="must not overlap"):
+            chacha.decrypt_into(
+                nonce,
+                memoryview(buf)[: len(ct)],
+                ad,
+                memoryview(buf)[offset : offset + len(pt)],
+            )
 
 
 @pytest.mark.skipif(
@@ -291,7 +315,7 @@ class TestAESCCM:
         with pytest.raises(OverflowError):
             aesccm.encrypt(nonce, b"", large_data)
 
-    def test_default_tag_length(self, backend):
+    def test_default_tag_length(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         nonce = os.urandom(12)
@@ -299,7 +323,7 @@ class TestAESCCM:
         ct = aesccm.encrypt(nonce, pt, None)
         assert len(ct) == len(pt) + 16
 
-    def test_invalid_tag_length(self, backend):
+    def test_invalid_tag_length(self):
         key = AESCCM.generate_key(128)
         with pytest.raises(ValueError):
             AESCCM(key, tag_length=7)
@@ -308,9 +332,9 @@ class TestAESCCM:
             AESCCM(key, tag_length=2)
 
         with pytest.raises(TypeError):
-            AESCCM(key, tag_length="notanint")  # type:ignore[arg-type]
+            AESCCM(key, tag_length=typing.cast(typing.Any, "notanint"))
 
-    def test_invalid_nonce_length(self, backend):
+    def test_invalid_nonce_length(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         pt = b"hello"
@@ -329,7 +353,7 @@ class TestAESCCM:
             buf = bytearray(16)
             aesccm.decrypt_into(nonce[:6], b"x" * 20, None, buf)
 
-    def test_vectors(self, subtests, backend):
+    def test_vectors(self, subtests):
         vectors = _load_all_params(
             os.path.join("ciphers", "AES", "CCM"),
             [
@@ -364,7 +388,7 @@ class TestAESCCM:
                     assert computed_pt == pt
                     assert aesccm.encrypt(nonce, pt, adata) == ct
 
-    def test_roundtrip(self, backend):
+    def test_roundtrip(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         pt = b"encrypt me"
@@ -374,7 +398,7 @@ class TestAESCCM:
         computed_pt = aesccm.decrypt(nonce, ct, ad)
         assert computed_pt == pt
 
-    def test_nonce_too_long(self, backend):
+    def test_nonce_too_long(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         pt = b"encrypt me" * 6600
@@ -394,27 +418,27 @@ class TestAESCCM:
             [b"0" * 12, b"data", object()],
         ],
     )
-    def test_params_not_bytes(self, nonce, data, associated_data, backend):
+    def test_params_not_bytes(self, nonce, data, associated_data):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         with pytest.raises(TypeError):
             aesccm.encrypt(nonce, data, associated_data)
 
-    def test_bad_key(self, backend):
+    def test_bad_key(self):
         with pytest.raises(TypeError):
-            AESCCM(object())  # type:ignore[arg-type]
+            AESCCM(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESCCM(b"0" * 31)
 
-    def test_bad_generate_key(self, backend):
+    def test_bad_generate_key(self):
         with pytest.raises(TypeError):
-            AESCCM.generate_key(object())  # type:ignore[arg-type]
+            AESCCM.generate_key(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESCCM.generate_key(129)
 
-    def test_associated_data_none_equal_to_empty_bytestring(self, backend):
+    def test_associated_data_none_equal_to_empty_bytestring(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         nonce = os.urandom(12)
@@ -425,7 +449,7 @@ class TestAESCCM:
         pt2 = aesccm.decrypt(nonce, ct2, b"")
         assert pt1 == pt2
 
-    def test_decrypt_data_too_short(self, backend):
+    def test_decrypt_data_too_short(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         with pytest.raises(InvalidTag):
@@ -435,7 +459,7 @@ class TestAESCCM:
             buf = bytearray(16)
             aesccm.decrypt_into(b"0" * 12, b"0", None, buf)
 
-    def test_buffer_protocol(self, backend):
+    def test_buffer_protocol(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         pt = b"encrypt me"
@@ -460,7 +484,7 @@ class TestAESCCM:
         decrypted_data = aesccm.decrypt(nonce, ciphertext, aad)
         assert decrypted_data == plaintext
 
-    def test_encrypt_into(self, backend):
+    def test_encrypt_into(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         nonce = os.urandom(12)
@@ -475,7 +499,7 @@ class TestAESCCM:
     @pytest.mark.parametrize(
         ("ptlen", "buflen"), [(10, 25), (10, 27), (15, 30), (20, 37)]
     )
-    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen, backend):
+    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         nonce = os.urandom(12)
@@ -484,7 +508,7 @@ class TestAESCCM:
         with pytest.raises(ValueError, match="buffer must be"):
             aesccm.encrypt_into(nonce, pt, None, buf)
 
-    def test_decrypt_into(self, backend):
+    def test_decrypt_into(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         nonce = os.urandom(12)
@@ -499,7 +523,7 @@ class TestAESCCM:
     @pytest.mark.parametrize(
         ("ctlen", "buflen"), [(26, 9), (26, 11), (31, 14), (36, 21)]
     )
-    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen, backend):
+    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         nonce = os.urandom(12)
@@ -508,7 +532,7 @@ class TestAESCCM:
         with pytest.raises(ValueError, match="buffer must be"):
             aesccm.decrypt_into(nonce, ct, None, buf)
 
-    def test_decrypt_into_invalid_tag(self, backend):
+    def test_decrypt_into_invalid_tag(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         nonce = os.urandom(12)
@@ -522,7 +546,7 @@ class TestAESCCM:
         with pytest.raises(InvalidTag):
             aesccm.decrypt_into(nonce, bytes(corrupted_ct), ad, buf)
 
-    def test_decrypt_into_nonce_too_long(self, backend):
+    def test_decrypt_into_nonce_too_long(self):
         key = AESCCM.generate_key(128)
         aesccm = AESCCM(key)
         pt = b"encrypt me" * 6600
@@ -611,7 +635,7 @@ class TestAESGCM:
             [b"0" * 12, b"data", object()],
         ],
     )
-    def test_params_not_bytes(self, nonce, data, associated_data, backend):
+    def test_params_not_bytes(self, nonce, data, associated_data):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         with pytest.raises(TypeError):
@@ -640,21 +664,21 @@ class TestAESGCM:
             buf = bytearray(16)
             aesgcm.decrypt_into(b"\x00" * length, b"hi", None, buf)
 
-    def test_bad_key(self, backend):
+    def test_bad_key(self):
         with pytest.raises(TypeError):
-            AESGCM(object())  # type:ignore[arg-type]
+            AESGCM(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESGCM(b"0" * 31)
 
-    def test_bad_generate_key(self, backend):
+    def test_bad_generate_key(self):
         with pytest.raises(TypeError):
-            AESGCM.generate_key(object())  # type:ignore[arg-type]
+            AESGCM.generate_key(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESGCM.generate_key(129)
 
-    def test_associated_data_none_equal_to_empty_bytestring(self, backend):
+    def test_associated_data_none_equal_to_empty_bytestring(self):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)
@@ -665,7 +689,7 @@ class TestAESGCM:
         pt2 = aesgcm.decrypt(nonce, ct2, b"")
         assert pt1 == pt2
 
-    def test_buffer_protocol(self, backend):
+    def test_buffer_protocol(self):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         pt = b"encrypt me"
@@ -692,7 +716,7 @@ class TestAESGCM:
         computed_pt3 = aesgcm3.decrypt(m_nonce, m_ct3, m_ad)
         assert computed_pt3 == pt
 
-    def test_encrypt_into(self, backend):
+    def test_encrypt_into(self):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)
@@ -707,7 +731,7 @@ class TestAESGCM:
     @pytest.mark.parametrize(
         ("ptlen", "buflen"), [(10, 25), (10, 27), (15, 30), (20, 37)]
     )
-    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen, backend):
+    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)
@@ -716,7 +740,7 @@ class TestAESGCM:
         with pytest.raises(ValueError, match="buffer must be"):
             aesgcm.encrypt_into(nonce, pt, None, buf)
 
-    def test_decrypt_into(self, backend):
+    def test_decrypt_into(self):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)
@@ -731,7 +755,7 @@ class TestAESGCM:
     @pytest.mark.parametrize(
         ("ctlen", "buflen"), [(26, 9), (26, 11), (31, 14), (36, 21)]
     )
-    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen, backend):
+    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)
@@ -740,7 +764,7 @@ class TestAESGCM:
         with pytest.raises(ValueError, match="buffer must be"):
             aesgcm.decrypt_into(nonce, ct, None, buf)
 
-    def test_decrypt_into_invalid_tag(self, backend):
+    def test_decrypt_into_invalid_tag(self):
         key = AESGCM.generate_key(128)
         aesgcm = AESGCM(key)
         nonce = os.urandom(12)
@@ -754,12 +778,37 @@ class TestAESGCM:
         with pytest.raises(InvalidTag):
             aesgcm.decrypt_into(nonce, bytes(corrupted_ct), ad, buf)
 
+    @pytest.mark.parametrize("offset", [0, 12])
+    def test_encrypt_into_overlapping_buffer(self, offset):
+        key = AESGCM.generate_key(128)
+        aesgcm = AESGCM(key)
+        nonce = os.urandom(12)
+        pt = os.urandom(1000)
+        ad = b"additional"
+        ct = aesgcm.encrypt(nonce, pt, ad)
+
+        buf = bytearray(offset + len(pt) + 16)
+        buf[: len(pt)] = pt
+        with pytest.raises(ValueError, match="must not overlap"):
+            aesgcm.encrypt_into(
+                nonce, memoryview(buf)[: len(pt)], ad, memoryview(buf)[offset:]
+            )
+
+        buf = bytearray(ct + bytes(offset))
+        with pytest.raises(ValueError, match="must not overlap"):
+            aesgcm.decrypt_into(
+                nonce,
+                memoryview(buf)[: len(ct)],
+                ad,
+                memoryview(buf)[offset : offset + len(pt)],
+            )
+
 
 @pytest.mark.skipif(
     _aead_supported(AESOCB3),
     reason="Requires OpenSSL without AESOCB3 support",
 )
-def test_aesocb3_unsupported_on_older_openssl(backend):
+def test_aesocb3_unsupported_on_older_openssl():
     with raises_unsupported_algorithm(_Reasons.UNSUPPORTED_CIPHER):
         AESOCB3(AESOCB3.generate_key(128))
 
@@ -786,7 +835,7 @@ class TestAESOCB3:
         with pytest.raises(OverflowError):
             aesocb3.encrypt(nonce, b"", large_data)
 
-    def test_vectors(self, backend, subtests):
+    def test_vectors(self, subtests):
         vectors = []
         for f in [
             "rfc7253.txt",
@@ -815,7 +864,7 @@ class TestAESOCB3:
                 computed_pt = aesocb3.decrypt(nonce, ct, aad)
                 assert computed_pt == pt
 
-    def test_vectors_invalid(self, backend, subtests):
+    def test_vectors_invalid(self, subtests):
         vectors = load_vectors_from_file(
             os.path.join("ciphers", "AES", "OCB3", "rfc7253.txt"),
             load_nist_vectors,
@@ -845,7 +894,7 @@ class TestAESOCB3:
             (256, b"\xd9\x0e\xb8\xe9\xc9w\xc8\x8by\xddy=\x7f\xfa\x16\x1c"),
         ],
     )
-    def test_rfc7253(self, backend, key_len, expected):
+    def test_rfc7253(self, key_len, expected):
         # This is derived from page 18 of RFC 7253, with a tag length of
         # 128 bits.
 
@@ -877,7 +926,7 @@ class TestAESOCB3:
             [b"0" * 12, b"data", object()],
         ],
     )
-    def test_params_not_bytes(self, nonce, data, associated_data, backend):
+    def test_params_not_bytes(self, nonce, data, associated_data):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         with pytest.raises(TypeError):
@@ -886,7 +935,7 @@ class TestAESOCB3:
         with pytest.raises(TypeError):
             aesocb3.decrypt(nonce, data, associated_data)
 
-    def test_invalid_nonce_length(self, backend):
+    def test_invalid_nonce_length(self):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         with pytest.raises(ValueError):
@@ -913,21 +962,21 @@ class TestAESOCB3:
             buf = bytearray(16)
             aesocb3.decrypt_into(b"\x00" * 16, b"x" * 20, None, buf)
 
-    def test_bad_key(self, backend):
+    def test_bad_key(self):
         with pytest.raises(TypeError):
-            AESOCB3(object())  # type:ignore[arg-type]
+            AESOCB3(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESOCB3(b"0" * 31)
 
-    def test_bad_generate_key(self, backend):
+    def test_bad_generate_key(self):
         with pytest.raises(TypeError):
-            AESOCB3.generate_key(object())  # type:ignore[arg-type]
+            AESOCB3.generate_key(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESOCB3.generate_key(129)
 
-    def test_associated_data_none_equal_to_empty_bytestring(self, backend):
+    def test_associated_data_none_equal_to_empty_bytestring(self):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         nonce = os.urandom(12)
@@ -938,7 +987,7 @@ class TestAESOCB3:
         pt2 = aesocb3.decrypt(nonce, ct2, b"")
         assert pt1 == pt2
 
-    def test_buffer_protocol(self, backend):
+    def test_buffer_protocol(self):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         pt = b"encrypt me"
@@ -953,7 +1002,7 @@ class TestAESOCB3:
         computed_pt2 = aesocb3_.decrypt(bytearray(nonce), ct2, ad)
         assert computed_pt2 == pt
 
-    def test_encrypt_into(self, backend):
+    def test_encrypt_into(self):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         nonce = os.urandom(12)
@@ -968,7 +1017,7 @@ class TestAESOCB3:
     @pytest.mark.parametrize(
         ("ptlen", "buflen"), [(10, 25), (10, 27), (15, 30), (20, 37)]
     )
-    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen, backend):
+    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         nonce = os.urandom(12)
@@ -977,7 +1026,7 @@ class TestAESOCB3:
         with pytest.raises(ValueError, match="buffer must be"):
             aesocb3.encrypt_into(nonce, pt, None, buf)
 
-    def test_decrypt_into(self, backend):
+    def test_decrypt_into(self):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         nonce = os.urandom(12)
@@ -992,7 +1041,7 @@ class TestAESOCB3:
     @pytest.mark.parametrize(
         ("ctlen", "buflen"), [(26, 9), (26, 11), (31, 14), (36, 21)]
     )
-    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen, backend):
+    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         nonce = os.urandom(12)
@@ -1001,7 +1050,7 @@ class TestAESOCB3:
         with pytest.raises(ValueError, match="buffer must be"):
             aesocb3.decrypt_into(nonce, ct, None, buf)
 
-    def test_decrypt_into_invalid_tag(self, backend):
+    def test_decrypt_into_invalid_tag(self):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         nonce = os.urandom(12)
@@ -1015,7 +1064,7 @@ class TestAESOCB3:
         with pytest.raises(InvalidTag):
             aesocb3.decrypt_into(nonce, bytes(corrupted_ct), ad, buf)
 
-    def test_decrypt_into_data_too_short(self, backend):
+    def test_decrypt_into_data_too_short(self):
         key = AESOCB3.generate_key(128)
         aesocb3 = AESOCB3(key)
         nonce = os.urandom(12)
@@ -1070,7 +1119,7 @@ class TestAESSIV:
         with pytest.raises(InvalidTag):
             aessiv.decrypt(b"", None)
 
-    def test_vectors(self, backend, subtests):
+    def test_vectors(self, subtests):
         vectors = load_vectors_from_file(
             os.path.join("ciphers", "AES", "SIV", "openssl.txt"),
             load_nist_vectors,
@@ -1096,7 +1145,7 @@ class TestAESSIV:
                 computed_pt = aessiv.decrypt(computed_ct, aad)
                 assert computed_pt == pt
 
-    def test_vectors_invalid(self, backend, subtests):
+    def test_vectors_invalid(self, subtests):
         vectors = load_vectors_from_file(
             os.path.join("ciphers", "AES", "SIV", "openssl.txt"),
             load_nist_vectors,
@@ -1133,7 +1182,7 @@ class TestAESSIV:
             [b"data" * 5, b""],
         ],
     )
-    def test_params_not_bytes(self, data, associated_data, backend):
+    def test_params_not_bytes(self, data, associated_data):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         with pytest.raises(TypeError):
@@ -1142,21 +1191,21 @@ class TestAESSIV:
         with pytest.raises(TypeError):
             aessiv.decrypt(data, associated_data)
 
-    def test_bad_key(self, backend):
+    def test_bad_key(self):
         with pytest.raises(TypeError):
-            AESSIV(object())  # type:ignore[arg-type]
+            AESSIV(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESSIV(b"0" * 31)
 
-    def test_bad_generate_key(self, backend):
+    def test_bad_generate_key(self):
         with pytest.raises(TypeError):
-            AESSIV.generate_key(object())  # type:ignore[arg-type]
+            AESSIV.generate_key(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESSIV.generate_key(128)
 
-    def test_data_too_short(self, backend):
+    def test_data_too_short(self):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         with pytest.raises(InvalidTag):
@@ -1165,7 +1214,7 @@ class TestAESSIV:
             buf = bytearray(16)
             aessiv.decrypt_into(b"tooshort", None, buf)
 
-    def test_associated_data_none_equal_to_empty_list(self, backend):
+    def test_associated_data_none_equal_to_empty_list(self):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         ct1 = aessiv.encrypt(b"some_data", None)
@@ -1175,7 +1224,7 @@ class TestAESSIV:
         pt2 = aessiv.decrypt(ct2, [])
         assert pt1 == pt2
 
-    def test_buffer_protocol(self, backend):
+    def test_buffer_protocol(self):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         pt = b"encrypt me"
@@ -1189,7 +1238,7 @@ class TestAESSIV:
         computed_pt2 = aessiv.decrypt(ct2, ad)
         assert computed_pt2 == pt
 
-    def test_encrypt_into(self, backend):
+    def test_encrypt_into(self):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         pt = b"encrypt me"
@@ -1203,7 +1252,7 @@ class TestAESSIV:
     @pytest.mark.parametrize(
         ("ptlen", "buflen"), [(10, 25), (10, 27), (15, 30), (20, 37)]
     )
-    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen, backend):
+    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         pt = b"x" * ptlen
@@ -1211,7 +1260,7 @@ class TestAESSIV:
         with pytest.raises(ValueError, match="buffer must be"):
             aessiv.encrypt_into(pt, None, buf)
 
-    def test_decrypt_into(self, backend):
+    def test_decrypt_into(self):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         pt = b"decrypt me"
@@ -1225,7 +1274,7 @@ class TestAESSIV:
     @pytest.mark.parametrize(
         ("ctlen", "buflen"), [(26, 9), (26, 11), (31, 14), (36, 21)]
     )
-    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen, backend):
+    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         ct = b"x" * ctlen
@@ -1233,7 +1282,7 @@ class TestAESSIV:
         with pytest.raises(ValueError, match="buffer must be"):
             aessiv.decrypt_into(ct, None, buf)
 
-    def test_decrypt_into_invalid_tag(self, backend):
+    def test_decrypt_into_invalid_tag(self):
         key = AESSIV.generate_key(256)
         aessiv = AESSIV(key)
         pt = b"some data"
@@ -1245,6 +1294,27 @@ class TestAESSIV:
         buf = bytearray(len(pt))
         with pytest.raises(InvalidTag):
             aessiv.decrypt_into(bytes(corrupted_ct), ad, buf)
+
+    @pytest.mark.parametrize("offset", [0, 16])
+    def test_encrypt_into_overlapping_buffer(self, offset):
+        key = AESSIV.generate_key(256)
+        aessiv = AESSIV(key)
+        pt = os.urandom(1000)
+        ad = [b"additional"]
+        ct = aessiv.encrypt(pt, ad)
+
+        buf = bytearray(len(pt) + 16)
+        buf[offset : offset + len(pt)] = pt
+        with pytest.raises(ValueError, match="must not overlap"):
+            aessiv.encrypt_into(
+                memoryview(buf)[offset : offset + len(pt)], ad, buf
+            )
+
+        buf = bytearray(ct)
+        with pytest.raises(ValueError, match="must not overlap"):
+            aessiv.decrypt_into(
+                buf, ad, memoryview(buf)[offset : offset + len(pt)]
+            )
 
 
 @pytest.mark.skipif(
@@ -1272,7 +1342,7 @@ class TestAESGCMSIV:
         with pytest.raises(OverflowError):
             aesgcmsiv.decrypt(nonce, b"very very irrelevant", large_data)
 
-    def test_invalid_nonce_length(self, backend):
+    def test_invalid_nonce_length(self):
         key = AESGCMSIV.generate_key(128)
         aesgcmsiv = AESGCMSIV(key)
         pt = b"hello"
@@ -1319,7 +1389,7 @@ class TestAESGCMSIV:
         with pytest.raises(InvalidTag):
             aesgcmsiv.decrypt(nonce, b"", None)
 
-    def test_vectors(self, backend, subtests):
+    def test_vectors(self, subtests):
         vectors = _load_all_params(
             os.path.join("ciphers", "AES", "GCM-SIV"),
             [
@@ -1352,7 +1422,7 @@ class TestAESGCMSIV:
                 computed_pt = aesgcmsiv.decrypt(nonce, computed_ct, aad)
                 assert computed_pt == pt
 
-    def test_vectors_invalid(self, backend, subtests):
+    def test_vectors_invalid(self, subtests):
         vectors = _load_all_params(
             os.path.join("ciphers", "AES", "GCM-SIV"),
             [
@@ -1393,7 +1463,7 @@ class TestAESGCMSIV:
             [b"0" * 12, b"data", object()],
         ],
     )
-    def test_params_not_bytes(self, nonce, data, associated_data, backend):
+    def test_params_not_bytes(self, nonce, data, associated_data):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         with pytest.raises(TypeError):
@@ -1402,9 +1472,9 @@ class TestAESGCMSIV:
         with pytest.raises(TypeError):
             aesgcmsiv.decrypt(nonce, data, associated_data)
 
-    def test_bad_key(self, backend):
+    def test_bad_key(self):
         with pytest.raises(TypeError):
-            AESGCMSIV(object())  # type:ignore[arg-type]
+            AESGCMSIV(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESGCMSIV(b"0" * 31)
@@ -1416,14 +1486,14 @@ class TestAESGCMSIV:
             with raises_unsupported_algorithm(_Reasons.UNSUPPORTED_CIPHER):
                 AESGCMSIV(b"0" * 24)
 
-    def test_bad_generate_key(self, backend):
+    def test_bad_generate_key(self):
         with pytest.raises(TypeError):
-            AESGCMSIV.generate_key(object())  # type:ignore[arg-type]
+            AESGCMSIV.generate_key(typing.cast(typing.Any, object()))
 
         with pytest.raises(ValueError):
             AESGCMSIV.generate_key(129)
 
-    def test_associated_data_none_equal_to_empty_bytestring(self, backend):
+    def test_associated_data_none_equal_to_empty_bytestring(self):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)
@@ -1434,7 +1504,7 @@ class TestAESGCMSIV:
         pt2 = aesgcmsiv.decrypt(nonce, ct2, b"")
         assert pt1 == pt2
 
-    def test_buffer_protocol(self, backend):
+    def test_buffer_protocol(self):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)
@@ -1449,7 +1519,7 @@ class TestAESGCMSIV:
         computed_pt2 = aesgcmsiv.decrypt(nonce, ct2, ad)
         assert computed_pt2 == pt
 
-    def test_encrypt_into(self, backend):
+    def test_encrypt_into(self):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)
@@ -1464,7 +1534,7 @@ class TestAESGCMSIV:
     @pytest.mark.parametrize(
         ("ptlen", "buflen"), [(10, 25), (10, 27), (15, 30), (20, 37)]
     )
-    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen, backend):
+    def test_encrypt_into_buffer_incorrect_size(self, ptlen, buflen):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)
@@ -1473,7 +1543,7 @@ class TestAESGCMSIV:
         with pytest.raises(ValueError, match="buffer must be"):
             aesgcmsiv.encrypt_into(nonce, pt, None, buf)
 
-    def test_decrypt_into(self, backend):
+    def test_decrypt_into(self):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)
@@ -1488,7 +1558,7 @@ class TestAESGCMSIV:
     @pytest.mark.parametrize(
         ("ctlen", "buflen"), [(26, 9), (26, 11), (31, 14), (36, 21)]
     )
-    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen, backend):
+    def test_decrypt_into_buffer_incorrect_size(self, ctlen, buflen):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)
@@ -1497,7 +1567,7 @@ class TestAESGCMSIV:
         with pytest.raises(ValueError, match="buffer must be"):
             aesgcmsiv.decrypt_into(nonce, ct, None, buf)
 
-    def test_decrypt_into_invalid_tag(self, backend):
+    def test_decrypt_into_invalid_tag(self):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)
@@ -1511,7 +1581,7 @@ class TestAESGCMSIV:
         with pytest.raises(InvalidTag):
             aesgcmsiv.decrypt_into(nonce, bytes(corrupted_ct), ad, buf)
 
-    def test_decrypt_into_data_too_short(self, backend):
+    def test_decrypt_into_data_too_short(self):
         key = AESGCMSIV.generate_key(256)
         aesgcmsiv = AESGCMSIV(key)
         nonce = os.urandom(12)

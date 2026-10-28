@@ -29,16 +29,6 @@ pub(crate) fn group_to_curve_oid(
         openssl::nid::Nid::SECP384R1 => Some(cryptography_x509::oid::EC_SECP384R1),
         openssl::nid::Nid::SECP521R1 => Some(cryptography_x509::oid::EC_SECP521R1),
         openssl::nid::Nid::SECP256K1 => Some(cryptography_x509::oid::EC_SECP256K1),
-        openssl::nid::Nid::SECT233R1 => Some(cryptography_x509::oid::EC_SECT233R1),
-        openssl::nid::Nid::SECT283R1 => Some(cryptography_x509::oid::EC_SECT283R1),
-        openssl::nid::Nid::SECT409R1 => Some(cryptography_x509::oid::EC_SECT409R1),
-        openssl::nid::Nid::SECT571R1 => Some(cryptography_x509::oid::EC_SECT571R1),
-        openssl::nid::Nid::SECT163R2 => Some(cryptography_x509::oid::EC_SECT163R2),
-        openssl::nid::Nid::SECT163K1 => Some(cryptography_x509::oid::EC_SECT163K1),
-        openssl::nid::Nid::SECT233K1 => Some(cryptography_x509::oid::EC_SECT233K1),
-        openssl::nid::Nid::SECT283K1 => Some(cryptography_x509::oid::EC_SECT283K1),
-        openssl::nid::Nid::SECT409K1 => Some(cryptography_x509::oid::EC_SECT409K1),
-        openssl::nid::Nid::SECT571K1 => Some(cryptography_x509::oid::EC_SECT571K1),
         #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
         openssl::nid::Nid::BRAINPOOL_P256R1 => Some(cryptography_x509::oid::EC_BRAINPOOLP256R1),
         #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
@@ -64,19 +54,6 @@ pub(crate) fn ec_params_to_group(
                 &cryptography_x509::oid::EC_SECP521R1 => openssl::nid::Nid::SECP521R1,
 
                 &cryptography_x509::oid::EC_SECP256K1 => openssl::nid::Nid::SECP256K1,
-
-                &cryptography_x509::oid::EC_SECT233R1 => openssl::nid::Nid::SECT233R1,
-                &cryptography_x509::oid::EC_SECT283R1 => openssl::nid::Nid::SECT283R1,
-                &cryptography_x509::oid::EC_SECT409R1 => openssl::nid::Nid::SECT409R1,
-                &cryptography_x509::oid::EC_SECT571R1 => openssl::nid::Nid::SECT571R1,
-
-                &cryptography_x509::oid::EC_SECT163R2 => openssl::nid::Nid::SECT163R2,
-
-                &cryptography_x509::oid::EC_SECT163K1 => openssl::nid::Nid::SECT163K1,
-                &cryptography_x509::oid::EC_SECT233K1 => openssl::nid::Nid::SECT233K1,
-                &cryptography_x509::oid::EC_SECT283K1 => openssl::nid::Nid::SECT283K1,
-                &cryptography_x509::oid::EC_SECT409K1 => openssl::nid::Nid::SECT409K1,
-                &cryptography_x509::oid::EC_SECT571K1 => openssl::nid::Nid::SECT571K1,
 
                 #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
                 &cryptography_x509::oid::EC_BRAINPOOLP256R1 => openssl::nid::Nid::BRAINPOOL_P256R1,
@@ -183,12 +160,17 @@ pub fn parse_pkcs1_private_key(
     let private_number = openssl::bn::BigNum::from_slice(ec_private_key.private_key)?;
     let mut bn_ctx = openssl::bn::BigNumContext::new()?;
     let public_point = if let Some(point_bytes) = ec_private_key.public_key {
+        // The publicKey BIT STRING holds an octet-aligned EC point, so a
+        // non-zero unused-bits count is a malformed encoding.
+        if point_bytes.padding_bits() != 0 {
+            return Err(crate::KeyParsingError::InvalidKey);
+        }
         openssl::ec::EcPoint::from_bytes(&group, point_bytes.as_bytes(), &mut bn_ctx)
             .map_err(|_| crate::KeyParsingError::InvalidKey)?
     } else {
         let mut public_point = openssl::ec::EcPoint::new(&group)?;
         public_point
-            .mul_generator(&group, &private_number, &bn_ctx)
+            .mul_generator2(&group, &private_number, &mut bn_ctx)
             .map_err(|_| crate::KeyParsingError::InvalidKey)?;
         public_point
     };

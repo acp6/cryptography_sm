@@ -64,12 +64,8 @@ Asymmetric ciphers
   encrypted with ``AES-192-CBC``. The password is ``PolarSSLTest``.
 * ``asymmetric/PKCS8/ed25519-scrypt.pem`` a PKCS8 encoded Ed25519 key from
   RustCrypto using scrypt as the KDF. The password is ``hunter42``.
-* ``asymmetric/PKCS8/rsa-rc2-cbc-effective-key-length.pem`` a PKCS8 encoded key
-  encrypted with ``RC2-CBC`` with the ``effectiveKeyLength`` parameter set to
-  258. This is an invalid key.
-* ``asymmetric/PKCS8/enc-ec-sha1-128-rc4.pem`` a PKCS8 encoded ECDSA P-256 key
-  encrypted with ``pbeWithSHA1And128BitRC4``. The password is ``password``.
-
+* FIPS 203 ML-KEM-{512,768,1024} KAT vectors from `post-quantum-cryptography/KAT`_.
+* FIPS 204 ML-DSA-{44,65,87} KAT vectors from `post-quantum-cryptography/KAT`_.
 
 Custom asymmetric vectors
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -189,6 +185,9 @@ Custom asymmetric vectors
   ``sect233k1``.
 * ``asymmetric/EC/sect233r1-spki.pem`` - Contains an EC SPKI on the curve
   ``sect233r1``.
+* ``asymmetric/EC/ec_private_key_non_zero_unused_bits.der`` - Contains a
+  ``secp256r1`` private key whose ``publicKey`` bit string has the unused-bits
+  count set to 1 rather than the required 0.
 * ``asymmetric/X448/x448-pkcs8-enc.pem`` and
   ``asymmetric/X448/x448-pkcs8-enc.der`` contain an X448 key encrypted with
   AES 256 CBC with the password ``password``.
@@ -203,6 +202,9 @@ Custom asymmetric vectors
   ``asymmetric/Ed25519/ed25519-pkcs8.der`` contain an unencrypted Ed25519 key.
 * ``asymmetric/Ed25519/ed25519-pub.pem`` and
   ``asymmetric/Ed25519/ed25519-pub.der`` contain an Ed25519 public key.
+* ``asymmetric/Ed25519/ed25519-pub-non-zero-unused-bits.der`` contains an
+  Ed25519 SPKI whose ``subjectPublicKey`` bit string has the unused-bits count
+  set to 1 rather than the required 0.
 * ``asymmetric/X25519/x25519-pkcs8-enc.pem`` and
   ``asymmetric/X25519/x25519-pkcs8-enc.der`` contain an X25519 key encrypted
   with AES 256 CBC with the password ``password``.
@@ -249,6 +251,50 @@ Custom asymmetric vectors
   PEM with a ``secp256r1`` OID and an invalid (very large) private scalar.
 * ``asymmetric/PKCS8/invalid-version.der`` - Contains a PKCS8 encoded DER with
   an invalid version field.
+* ``asymmetric/PKCS8/ec-v2.der`` - Contains a ``secp256r1`` key encoded as an
+  :rfc:`5958` ``OneAsymmetricKey`` with version ``v2`` and no ``publicKey``.
+* ``asymmetric/PKCS8/ed25519-v2.der`` - Contains an Ed25519 key encoded as an
+  :rfc:`5958` ``OneAsymmetricKey`` with version ``v2`` and no ``publicKey``.
+* ``asymmetric/PKCS8/ec-v1-with-public-key.der`` - Contains a ``secp256r1``
+  key encoded as an :rfc:`5958` ``OneAsymmetricKey`` with version ``v1`` but
+  with the ``publicKey`` field present, which is not permitted.
+* ``asymmetric/PKCS8/rsa-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/ec-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/dsa-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/dh-pkcs3-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/dh-x942-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/x25519-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/x448-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/ed25519-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/ed448-v2-with-public-key.der``,
+  ``asymmetric/PKCS8/mlkem768-v2-with-public-key.der``, and
+  ``asymmetric/PKCS8/mldsa44-v2-with-public-key.der`` - Contain private keys
+  encoded as :rfc:`5958` ``OneAsymmetricKey`` with version ``v2`` and the
+  ``publicKey`` field present and matching the private key. The RSA, DSA, DH,
+  X25519, X448, Ed25519, Ed448, ML-KEM-768, and ML-DSA-44 keys are the same as
+  those in ``asymmetric/PKCS8/unenc-rsa-pkcs8.pem``,
+  ``asymmetric/PKCS8/unenc-dsa-pkcs8.pem``, ``asymmetric/DH/dhkey.pem``,
+  ``asymmetric/DH/dhkey_rfc5114_2.pem``, ``asymmetric/X25519/x25519-pkcs8.der``,
+  ``asymmetric/X448/x448-pkcs8.der``, ``asymmetric/Ed25519/ed25519-pkcs8.der``,
+  ``asymmetric/Ed448/ed448-pkcs8.der``, ``asymmetric/MLKEM/mlkem768.der``, and
+  ``asymmetric/MLDSA/mldsa44_priv.der`` respectively.
+* ``asymmetric/PKCS8/ec-v2-with-compressed-public-key.der`` - The same key as
+  ``asymmetric/PKCS8/ec-v2-with-public-key.der``, but with the ``publicKey``
+  encoded as a compressed point.
+* ``asymmetric/PKCS8/rsa-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/ec-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/dsa-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/dh-pkcs3-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/dh-x942-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/x25519-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/x448-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/ed25519-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/ed448-v2-with-wrong-public-key.der``,
+  ``asymmetric/PKCS8/mlkem768-v2-with-wrong-public-key.der``, and
+  ``asymmetric/PKCS8/mldsa44-v2-with-wrong-public-key.der`` - The same private
+  keys as above, encoded as :rfc:`5958` ``OneAsymmetricKey`` with version
+  ``v2``, but with a ``publicKey`` field that does not correspond to the
+  private key.
 * ``asymmetric/PKCS8/unknown-oid.der`` - Contains a PKCS8 encoded DER with an
   unknown OID.
 * ``asymmetric/Traditional_OpenSSL_Serialization/rsa-wrong-version.pem`` - An
@@ -298,6 +344,20 @@ Custom asymmetric vectors
   private key value has its high bit set.
 * ``asymmetric/EC/truncated-private-key.der`` - A PKCS#1 encoded EC key where
   the private key value is not encoded to the order's length.
+* ``asymmetric/PKCS8/rsa-rc2-cbc-effective-key-length.pem`` a PKCS8 encoded key
+  encrypted with ``RC2-CBC`` with the ``effectiveKeyLength`` parameter set to
+  258. This is an invalid key.
+* ``asymmetric/PKCS8/enc-ec-sha1-128-rc4.pem`` a PKCS8 encoded ECDSA P-256 key
+  encrypted with ``pbeWithSHA1And128BitRC4``. The password is ``password``.
+* ``asymmetric/PKCS8/enc-rsa-pkcs8-pbkdf2-0iter.pem`` a PKCS8 encoded
+  structure with an invalid PBKDF2 iteration count (zero).
+* ``asymmetric/MLDSA/mldsa44_pub.der`` and ``asymmetric/MLDSA/mldsa44_priv.der``
+  a PKCS8 encoded key pair for ML-DSA-44 generated by OpenSSL.
+* ``asymmetric/MLDSA/mldsa65_noseed_priv.der`` a PKCS8 encoded ML-DSA-65 private
+  key serialized without the seed.
+* ``asymmetric/MLKEM/mlkem768.der`` and ``asymmetric/MLKEM/mlkem768.pem``, PKCS8
+  DER/PEM encoded MLKEM-768 private key using the seed of the first test vector
+  of ``kat_MLKEM_768.rsp``.
 
 Key exchange
 ~~~~~~~~~~~~
@@ -342,6 +402,11 @@ Key exchange
   are the above parameters and keys in DER format.
 * ``vectors/cryptography_vectors/asymmetric/DH/dh_key_256.pem`` contains
   a PEM PKCS8 encoded DH key with a 256-bit key size.
+
+* ``vectors/cryptography_vectors/asymmetric/DH/dhp_privatevaluelength.pem``
+  contains PKCS#3 ``DH PARAMETERS`` that include the optional
+  ``privateValueLength`` field, which must not be confused with an X9.42
+  subprime ``q``.
 
 * ``vectors/cryptoraphy_vectors/asymmetric/ECDH/brainpool.txt`` contains
   Brainpool vectors from :rfc:`7027`.
@@ -459,6 +524,9 @@ Custom X.509 Vectors
   "We heart UTF8!™".
 * ``invalid_utf8_common_name.pem`` - A certificate that contains a
   ``UTF8String`` common name with an invalid UTF-8 byte sequence.
+* ``name_attribute_unsupported_tag.pem`` - A certificate whose subject and
+  issuer common name values carry an ASN.1 tag (``0x69``) that is not one of
+  the recognized string types. The signature on this certificate is invalid.
 * ``two_basic_constraints.pem`` - An RSA 2048 bit self-signed certificate
   containing two basic constraints extensions.
 * ``basic_constraints_not_critical.pem`` - An RSA 2048 bit self-signed
@@ -657,6 +725,10 @@ Custom X.509 Vectors
   This is an invalid certificate per CA/B 7.1.2.7.6.
 * ``empty-eku.pem`` - A leaf certificate containing an empty EKU extension.
   This is an invalid certificate per :rfc:`5280` 4.2.1.12.
+* ``empty-san.pem`` - A leaf certificate containing an empty ``subjectAltName``
+  extension. This is an invalid certificate per :rfc:`5280` 4.2.1.6.
+* ``empty-ian.pem`` - A leaf certificate containing an empty ``issuerAltName``
+  extension. This is an invalid certificate per :rfc:`5280` 4.2.1.7.
 * ``malformed-san.pem`` - A certificate with a malformed SAN.
 * ``malformed-ian.pem`` - A certificate with a malformed IAN.
 * ``admissions_extension_optional_data_not_provided.pem`` -
@@ -731,6 +803,10 @@ Custom X.509 Request Vectors
   attribute whose value's tag is encoded in the long form.
 * ``zero-element-attribute.pem`` - A certificate signing request containing an
   attribute whose value has zero elements.
+* ``two-extension-requests.pem`` - A certificate signing request containing
+  both a Microsoft extension request attribute with a non-CA basic constraints
+  extension and a PKCS#9 extension request attribute with a critical CA basic
+  constraints extension.
 
 Custom X.509 Certificate Revocation List Vectors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -806,6 +882,9 @@ Custom X.509 Certificate Revocation List Vectors
   outer signature algorithm. The signature on this CRL is invalid.
 * ``crl_issuer_invalid_printable_string.der`` - A CRL where the ``issuer``
   field contains an invalid ``PRINTABLE STRING`` value.
+* ``crl_inval_date_fractional_seconds.der`` - A CRL with one revocation whose
+  ``InvalidityDate`` entry extension carries a ``GeneralizedTime`` with
+  fractional seconds, which is not valid DER.
 
 X.509 OCSP Test Vectors
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -860,6 +939,12 @@ Custom X.509 OCSP Test Vectors
   invalid hash algorithm OID.
 * ``x509/ocsp/req-acceptable-responses.der`` - An OCSP request containing an
   acceptable responses extension.
+* ``x509/ocsp/req-invalid-version.der`` - ``req-sha1.der`` modified so the
+  ``tbsRequest`` carries an explicit version of 1, which is not defined by
+  RFC 6960.
+* ``x509/ocsp/resp-invalid-version.der`` - ``resp-sha256.der`` modified so the
+  ``tbsResponseData`` carries an explicit version of 1, which is not defined by
+  RFC 6960.
 
 Custom PKCS12 Test Vectors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1014,6 +1099,9 @@ Custom PKCS7 Test Vectors
 * ``pkcs7/non-ascii-san.pem`` - An invalid certificate adapted for S/MIME
   signature & verification. It has an non-ASCII subject alternative name stored
   as `rfc822Name`.
+* ``pkcs7/authenticode.der`` - A DER encoded PKCS7 file containing an
+  Authenticode signature (with a ``SpcIndirectDataContent`` inner content
+  type), extracted from `Fedora 44's grubx64.efi`_.
 
 Custom OpenSSH Test Vectors
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1129,6 +1217,8 @@ HPKE (Hybrid Public Key Encryption)
   These vectors cover all four modes (Base, PSK, Auth, AuthPSK), multiple KEMs
   (X25519, X448, P-256, P-521), KDFs (HKDF-SHA256, HKDF-SHA512), and AEADs
   (AES-128-GCM, AES-256-GCM, ChaCha20Poly1305).
+* HPKE post-quantum and hybrid vectors (including SHAKE and TurboSHAKE KDF IDs)
+  from `hpkewg/hpke-pq test vectors`_.
 
 Key wrapping
 ~~~~~~~~~~~~
@@ -1140,6 +1230,7 @@ Recipes
 ~~~~~~~
 
 * Fernet from its `specification repository`_.
+* Chunked encryption from the `chunked reference implementation`_.
 
 Symmetric ciphers
 ~~~~~~~~~~~~~~~~~
@@ -1161,8 +1252,7 @@ Symmetric ciphers
 * CAST5 (ECB) from :rfc:`2144`.
 * CAST5 (CBC, CFB, OFB) generated by this project.
   See: :doc:`/development/custom-vectors/cast5`
-* ChaCha20 from :rfc:`7539` and generated by this project.
-  See: :doc:`/development/custom-vectors/chacha20`
+* ChaCha20 from :rfc:`7539`.
 * ChaCha20Poly1305 from :rfc:`7539`, `OpenSSL's evpciph.txt`_, and the
   `BoringSSL ChaCha20Poly1305 tests`_.
 * IDEA (ECB) from the `NESSIE IDEA vectors`_ created by `NESSIE`_.
@@ -1208,7 +1298,6 @@ Created Vectors
     custom-vectors/aes-192-gcm-siv
     custom-vectors/arc4
     custom-vectors/cast5
-    custom-vectors/chacha20
     custom-vectors/idea
     custom-vectors/seed
     custom-vectors/hkdf
@@ -1231,6 +1320,7 @@ header format (substituting the correct information):
 .. _`NIST`: https://www.nist.gov/
 .. _`IETF`: https://www.ietf.org/
 .. _`Project Wycheproof`: https://github.com/C2SP/wycheproof
+.. _`post-quantum-cryptography/KAT`: https://github.com/post-quantum-cryptography/KAT
 .. _`NIST CAVP`: https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program
 .. _`Bruce Schneier's vectors`: https://www.schneier.com/wp-content/uploads/2015/12/vectors-2.txt
 .. _`Camellia page`: https://info.isl.ntt.co.jp/crypt/eng/camellia/
@@ -1242,6 +1332,7 @@ header format (substituting the correct information):
 .. _`RIPEMD website`: https://homes.esat.kuleuven.be/~bosselae/ripemd160.html
 .. _`draft RFC`: https://datatracker.ietf.org/doc/html/draft-josefsson-scrypt-kdf-01
 .. _`Specification repository`: https://github.com/fernet/spec
+.. _`chunked reference implementation`: https://github.com/FiloSottile/chunked
 .. _`errata`: https://www.rfc-editor.org/errata_search.php?rfc=6238
 .. _`enc-rsa-pkcs8.pem`: https://gitlab.com/gnutls/gnutls/blob/f8d943b38bf74eaaa11d396112daf43cb8aa82ae/tests/pkcs8-decode/encpkcs8.pem
 .. _`enc2-rsa-pkcs8.pem`: https://gitlab.com/gnutls/gnutls/blob/f8d943b38bf74eaaa11d396112daf43cb8aa82ae/tests/pkcs8-decode/enc2pkcs8.pem
@@ -1266,6 +1357,7 @@ header format (substituting the correct information):
 .. _`DHKE`: https://sandilands.info/sgordon/diffie-hellman-secret-key-exchange-with-openssl
 .. _`Botan's key wrap vectors`: https://github.com/randombit/botan/blob/737f33c09a18500e044dca3e2ae13bd2c08bafdd/src/tests/data/keywrap/nist_key_wrap.vec
 .. _`root-ed25519.pem`: https://github.com/openssl/openssl/blob/2a1e2fe145c6eb8e75aa2e1b3a8c3a49384b2852/test/certs/root-ed25519.pem
+.. _`Fedora 44's grubx64.efi`: https://dl.fedoraproject.org/pub/fedora/linux/releases/44/Server/x86_64/os/EFI/BOOT/grubx64.efi
 .. _`server-ed25519-cert.pem`: https://github.com/openssl/openssl/blob/2a1e2fe145c6eb8e75aa2e1b3a8c3a49384b2852/test/certs/server-ed25519-cert.pem
 .. _`server-ed448-cert.pem`: https://github.com/openssl/openssl/blob/2a1e2fe145c6eb8e75aa2e1b3a8c3a49384b2852/test/certs/server-ed448-cert.pem
 .. _`evpciph_aes_gcm_siv.txt`: https://github.com/openssl/openssl/blob/a2b1ab6100d5f0fb50b61d241471eea087415632/test/recipes/30-test_evp_data/evpciph_aes_gcm_siv.txt
@@ -1276,3 +1368,4 @@ header format (substituting the correct information):
 .. _`evpkdf_argon2.txt`: https://github.com/openssl/openssl/blob/01f4b44e075a796d62d3b007a80c5c04d0e77bfb/test/recipes/30-test_evp_data/evpkdf_argon2.txt
 .. _`OpenSSL's RFC 6979 test vectors`: https://github.com/openssl/openssl/blob/1dbe8a6e1c56d010c271a80eafb2c7fd1b92fbda/test/recipes/30-test_evp_data/evppkey_ecdsa_rfc6979.txt
 .. _`IETF CFRG HPKE repository`: https://github.com/cfrg/draft-irtf-cfrg-hpke
+.. _`hpkewg/hpke-pq test vectors`: https://github.com/hpkewg/hpke-pq/blob/main/test-vectors.json

@@ -42,12 +42,13 @@ has support for implementing key rotation via :class:`MultiFernet`.
         Encrypts data passed. The result of this encryption is known as a
         "Fernet token" and has strong privacy and authenticity guarantees.
 
-        :param bytes data: The message you would like to encrypt.
+        :param data: The message you would like to encrypt.
+        :type data: :term:`bytes-like`
         :returns bytes: A secure message that cannot be read or altered
                         without the key. It is URL-safe base64-encoded. This is
                         referred to as a "Fernet token".
         :raises TypeError: This exception is raised if ``data`` is not
-                           ``bytes``.
+                           :term:`bytes-like`.
 
         .. note::
 
@@ -221,10 +222,9 @@ Using passwords with Fernet
 ---------------------------
 
 It is possible to use passwords with Fernet. To do this, you need to run the
-password through a key derivation function such as
-:class:`~cryptography.hazmat.primitives.kdf.pbkdf2.PBKDF2HMAC`,
-:class:`~cryptography.hazmat.primitives.kdf.argon2.Argon2id` or
-:class:`~cryptography.hazmat.primitives.kdf.scrypt.Scrypt`.
+password through a key derivation function. ``cryptography`` provides several
+such functions; it is generally recommended to use
+:class:`~cryptography.hazmat.primitives.kdf.argon2.Argon2id`.
 
 .. doctest::
 
@@ -232,14 +232,15 @@ password through a key derivation function such as
     >>> import os
     >>> from cryptography.fernet import Fernet
     >>> from cryptography.hazmat.primitives import hashes
-    >>> from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    >>> from cryptography.hazmat.primitives.kdf.argon2 import Argon2id
     >>> password = b"password"
     >>> salt = os.urandom(16)
-    >>> kdf = PBKDF2HMAC(
-    ...     algorithm=hashes.SHA256(),
-    ...     length=32,
+    >>> kdf = Argon2id(
     ...     salt=salt,
-    ...     iterations=1_200_000,
+    ...     length=32,
+    ...     iterations=1,
+    ...     lanes=4,
+    ...     memory_cost=2**21
     ... )
     >>> key = base64.urlsafe_b64encode(kdf.derive(password))
     >>> f = Fernet(key)
@@ -252,9 +253,11 @@ password through a key derivation function such as
 In this scheme, the salt has to be stored in a retrievable location in order
 to derive the same key from the password in the future.
 
-The iteration count used should be adjusted to be as high as your server can
-tolerate. A good default is at least 1,200,000 iterations, which is what `Django
-recommends as of January 2025`_.
+The :class:`~cryptography.hazmat.primitives.kdf.argon2.Argon2id` parameters
+in the above code example are based on the recommendations of `IRTF RFC 9106`_
+for general applications. For memory-constrained applications, the RFC
+recommends ``iterations=3`` and ``memory_cost=2**16``. See that document for
+more information.
 
 Implementation
 --------------
@@ -268,7 +271,7 @@ Specifically it uses:
   :class:`~cryptography.hazmat.primitives.padding.PKCS7` padding.
 * :class:`~cryptography.hazmat.primitives.hmac.HMAC` using
   :class:`~cryptography.hazmat.primitives.hashes.SHA256` for authentication.
-* Initialization vectors are generated using ``os.urandom()``.
+* Initialization vectors are generated using a CSPRNG.
 
 For complete details consult the `specification`_.
 
@@ -282,5 +285,5 @@ unsuitable for very large files at this time.
 
 
 .. _`Fernet`: https://github.com/fernet/spec/
-.. _`Django recommends as of January 2025`: https://github.com/django/django/blob/main/django/contrib/auth/hashers.py
 .. _`specification`: https://github.com/fernet/spec/blob/master/Spec.md
+.. _`IRTF RFC 9106`: https://datatracker.ietf.org/doc/html/rfc9106#name-parameter-choice

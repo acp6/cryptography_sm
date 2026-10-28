@@ -1,0 +1,93 @@
+name: Windows wheel
+description: |
+  Builds (and smoke-tests) a cryptography wheel on Windows. Used by
+  wheel-builder.yml for both x64 and arm64 jobs to avoid duplication.
+
+inputs:
+  python-version:
+    description: "Python version to build for (e.g. 3.14, 3.14t, pypy3.11)"
+    required: true
+  abi-version:
+    description: "Optional limited-API ABI version (e.g. abi3-py39, abi3-py311, abi3t-py315)"
+    required: false
+    default: ""
+  arch:
+    description: "x64 or arm64"
+    required: true
+  rust-triple:
+    description: "Rust target triple"
+    required: true
+  openssl-name:
+    description: "OpenSSL artifact name suffix (win32, win64, arm64)"
+    required: true
+  build-requirements-path:
+    description: "Path to build-requirements.txt"
+    required: true
+  uv-version-file:
+    description: "Requirements file that pins the uv version"
+    required: true
+  wheel-artifact-name:
+    description: "Name of the uploaded wheel artifact"
+    required: true
+
+runs:
+  using: "composite"
+
+  steps:
+    - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        name: cryptography-sdist
+
+    # On Windows arm64 a bare version request gets uv the x86_64
+    # (emulated) interpreter, so ask for the aarch64 one by name.
+    - name: Setup python
+      uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
+      with:
+        version-file: ${{ inputs.uv-version-file }}
+        python-version: ${{ inputs.arch == 'arm64' && format('cpython-{0}-windows-aarch64-none', inputs.python-version) || inputs.python-version }}
+        enable-cache: false
+    - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
+      with:
+        toolchain: stable
+        target: ${{ inputs.rust-triple }}
+
+    - uses: dawidd6/action-download-artifact@eab87c9830c39eff17e5a6eadb20bfb4bc880477 # v27
+      with:
+        repo: pyca/infra
+        workflow: build-windows-openssl.yml
+        branch: main
+        workflow_conclusion: success
+        name: "openssl-${{ inputs.openssl-name }}"
+        path: "C:/openssl-${{ inputs.openssl-name }}/"
+        github_token: ${{ github.token }}
+    - name: Configure OpenSSL
+      run: |
+          echo "OPENSSL_DIR=C:/openssl-${OPENSSL_NAME}" >> $GITHUB_ENV
+          echo "OPENSSL_STATIC=1" >> $GITHUB_ENV
+      env:
+        OPENSSL_NAME: ${{ inputs.openssl-name }}
+      shell: bash
+
+    - run: mkdir wheelhouse
+      shell: bash
+    - run: |
+        if [ -n "${ABI_VERSION}" ]; then
+            PY_LIMITED_API="--config-settings=build-args=--features=pyo3/${ABI_VERSION}"
+        fi
+
+        uv build --wheel --require-hashes --build-constraint="${BUILD_REQUIREMENTS_PATH}" cryptography*.tar.gz $PY_LIMITED_API --config-settings=build-args=--sbom-include="C:/openssl-${OPENSSL_NAME}/sbom.json" -o wheelhouse/
+      env:
+        ABI_VERSION: ${{ inputs.abi-version }}
+        BUILD_REQUIREMENTS_PATH: ${{ inputs.build-requirements-path }}
+        OPENSSL_NAME: ${{ inputs.openssl-name }}
+      shell: bash
+
+    - name: Smoketest
+      uses: ./.github/actions/wheel-smoketest
+      with:
+        build-requirements-path: ${{ inputs.build-requirements-path }}
+
+    - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.wheel-artifact-name }}
+        path: wheelhouse\

@@ -17,6 +17,8 @@ from cryptography.hazmat.primitives.asymmetric import (
     ec,
     ed448,
     ed25519,
+    mldsa,
+    mlkem,
     padding,
     rsa,
     x448,
@@ -302,6 +304,7 @@ class CertificateBuilder:
         not_valid_before: datetime.datetime | None = None,
         not_valid_after: datetime.datetime | None = None,
         extensions: list[Extension[ExtensionType]] = [],
+        public_key_rsa_padding: type[padding.PSS] | None = None,
     ) -> None:
         self._version = Version.v3
         self._issuer_name = issuer_name
@@ -311,6 +314,7 @@ class CertificateBuilder:
         self._not_valid_before = not_valid_before
         self._not_valid_after = not_valid_after
         self._extensions = extensions
+        self._public_key_rsa_padding = public_key_rsa_padding
 
     def issuer_name(self, name: Name) -> CertificateBuilder:
         """
@@ -328,6 +332,7 @@ class CertificateBuilder:
             self._not_valid_before,
             self._not_valid_after,
             self._extensions,
+            self._public_key_rsa_padding,
         )
 
     def subject_name(self, name: Name) -> CertificateBuilder:
@@ -346,11 +351,14 @@ class CertificateBuilder:
             self._not_valid_before,
             self._not_valid_after,
             self._extensions,
+            self._public_key_rsa_padding,
         )
 
     def public_key(
         self,
         key: CertificatePublicKeyTypes,
+        *,
+        rsa_padding: type[padding.PSS] | None = None,
     ) -> CertificateBuilder:
         """
         Sets the requestor's public key (as found in the signing request).
@@ -358,11 +366,16 @@ class CertificateBuilder:
         if not isinstance(
             key,
             (
-                dsa.DSAPublicKey,
+                dsa._DSAPublicKey,
                 rsa.RSAPublicKey,
                 ec.EllipticCurvePublicKey,
                 ed25519.Ed25519PublicKey,
                 ed448.Ed448PublicKey,
+                mldsa.MLDSA44PublicKey,
+                mldsa.MLDSA65PublicKey,
+                mldsa.MLDSA87PublicKey,
+                mlkem.MLKEM768PublicKey,
+                mlkem.MLKEM1024PublicKey,
                 x25519.X25519PublicKey,
                 x448.X448PublicKey,
             ),
@@ -370,9 +383,19 @@ class CertificateBuilder:
             raise TypeError(
                 "Expecting one of DSAPublicKey, RSAPublicKey,"
                 " EllipticCurvePublicKey, Ed25519PublicKey,"
-                " Ed448PublicKey, X25519PublicKey, or "
-                "X448PublicKey."
+                " Ed448PublicKey, MLDSA44PublicKey, MLDSA65PublicKey,"
+                " MLDSA87PublicKey, MLKEM768PublicKey, MLKEM1024PublicKey,"
+                " X25519PublicKey or X448PublicKey."
             )
+        if rsa_padding is not None:
+            if rsa_padding is not padding.PSS:
+                raise TypeError(
+                    "rsa_padding must be the PSS class, not an instance"
+                )
+            if not isinstance(key, rsa.RSAPublicKey):
+                raise TypeError(
+                    "rsa_padding is only supported with RSA public keys"
+                )
         if self._public_key is not None:
             raise ValueError("The public key may only be set once.")
         return CertificateBuilder(
@@ -383,6 +406,7 @@ class CertificateBuilder:
             self._not_valid_before,
             self._not_valid_after,
             self._extensions,
+            rsa_padding,
         )
 
     def serial_number(self, number: int) -> CertificateBuilder:
@@ -410,6 +434,7 @@ class CertificateBuilder:
             self._not_valid_before,
             self._not_valid_after,
             self._extensions,
+            self._public_key_rsa_padding,
         )
 
     def not_valid_before(self, time: datetime.datetime) -> CertificateBuilder:
@@ -439,6 +464,7 @@ class CertificateBuilder:
             time,
             self._not_valid_after,
             self._extensions,
+            self._public_key_rsa_padding,
         )
 
     def not_valid_after(self, time: datetime.datetime) -> CertificateBuilder:
@@ -470,6 +496,7 @@ class CertificateBuilder:
             self._not_valid_before,
             time,
             self._extensions,
+            self._public_key_rsa_padding,
         )
 
     def add_extension(
@@ -492,6 +519,7 @@ class CertificateBuilder:
             self._not_valid_before,
             self._not_valid_after,
             [*self._extensions, extension],
+            self._public_key_rsa_padding,
         )
 
     def sign(
@@ -524,6 +552,9 @@ class CertificateBuilder:
         if self._public_key is None:
             raise ValueError("A certificate must have a public key")
 
+        if private_key is None:
+            raise TypeError("Need private key to sign certificate")
+
         if rsa_padding is not None:
             if not isinstance(rsa_padding, (padding.PSS, padding.PKCS1v15)):
                 raise TypeError("Padding must be PSS or PKCS1v15")
@@ -542,6 +573,36 @@ class CertificateBuilder:
             algorithm,
             rsa_padding,
             ecdsa_deterministic,
+        )
+
+    def create_unsigned(self) -> Certificate:
+        """
+        Creates an unsigned certificate, per RFC 9925.
+        """
+        if self._subject_name is None:
+            raise ValueError("A certificate must have a subject name")
+
+        if self._issuer_name is None:
+            raise ValueError("A certificate must have an issuer name")
+
+        if self._serial_number is None:
+            raise ValueError("A certificate must have a serial number")
+
+        if self._not_valid_before is None:
+            raise ValueError("A certificate must have a not valid before time")
+
+        if self._not_valid_after is None:
+            raise ValueError("A certificate must have a not valid after time")
+
+        if self._public_key is None:
+            raise ValueError("A certificate must have a public key")
+
+        return rust_x509.create_x509_certificate(
+            self,
+            private_key=None,
+            hash_algorithm=None,
+            rsa_padding=None,
+            ecdsa_deterministic=None,
         )
 
 

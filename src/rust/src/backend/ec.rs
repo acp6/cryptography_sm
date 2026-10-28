@@ -62,19 +62,6 @@ fn curve_from_py_curve(
 
         "secp256k1" => openssl::nid::Nid::SECP256K1,
 
-        "sect233r1" => openssl::nid::Nid::SECT233R1,
-        "sect283r1" => openssl::nid::Nid::SECT283R1,
-        "sect409r1" => openssl::nid::Nid::SECT409R1,
-        "sect571r1" => openssl::nid::Nid::SECT571R1,
-
-        "sect163r2" => openssl::nid::Nid::SECT163R2,
-
-        "sect163k1" => openssl::nid::Nid::SECT163K1,
-        "sect233k1" => openssl::nid::Nid::SECT233K1,
-        "sect283k1" => openssl::nid::Nid::SECT283K1,
-        "sect409k1" => openssl::nid::Nid::SECT409K1,
-        "sect571k1" => openssl::nid::Nid::SECT571K1,
-
         #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
         "brainpoolP256r1" => openssl::nid::Nid::BRAINPOOL_P256R1,
         #[cfg(not(any(CRYPTOGRAPHY_IS_BORINGSSL, CRYPTOGRAPHY_IS_AWSLC)))]
@@ -159,7 +146,7 @@ pub(crate) fn public_key_from_pkey(
 
 #[pyo3::pyfunction]
 #[pyo3(signature = (curve, backend=None))]
-fn generate_private_key(
+pub(crate) fn generate_private_key(
     py: pyo3::Python<'_>,
     curve: pyo3::Bound<'_, pyo3::PyAny>,
     backend: Option<pyo3::Bound<'_, pyo3::PyAny>>,
@@ -168,9 +155,10 @@ fn generate_private_key(
 
     let ossl_curve = curve_from_py_curve(py, curve)?;
     let key = openssl::ec::EcKey::generate(&ossl_curve)?;
+    let pkey = openssl::pkey::PKey::from_ec_key(key)?;
 
     Ok(ECPrivateKey {
-        pkey: openssl::pkey::PKey::from_ec_key(key)?,
+        pkey,
         curve: py_curve_from_curve(py, &ossl_curve)?.into(),
     })
 }
@@ -185,8 +173,8 @@ fn derive_private_key(
     let private_value = utils::py_int_to_bn(py, py_private_value)?;
 
     let mut point = openssl::ec::EcPoint::new(&curve)?;
-    let bn_ctx = openssl::bn::BigNumContext::new()?;
-    point.mul_generator(&curve, &private_value, &bn_ctx)?;
+    let mut bn_ctx = openssl::bn::BigNumContext::new()?;
+    point.mul_generator2(&curve, &private_value, &mut bn_ctx)?;
     let ec = openssl::ec::EcKey::from_private_components(&curve, &private_value, &point)
         .map_err(|_| pyo3::exceptions::PyValueError::new_err("Invalid EC key"))?;
     ec.check_key().map_err(|_| {
@@ -201,7 +189,7 @@ fn derive_private_key(
 }
 
 #[pyo3::pyfunction]
-fn from_public_bytes(
+pub(crate) fn from_public_bytes(
     py: pyo3::Python<'_>,
     py_curve: pyo3::Bound<'_, pyo3::PyAny>,
     data: &[u8],
@@ -266,9 +254,11 @@ impl ECPrivateKey {
 
         let len = deriver.len()?;
         Ok(pyo3::types::PyBytes::new_with(py, len, |b| {
-            let n = deriver.derive(b).map_err(|_| {
-                pyo3::exceptions::PyValueError::new_err("Error computing shared key.")
-            })?;
+            // Previously it was possible to have derive return an error
+            // if a public key was in a subgroup. Now that we only
+            // support cofactor 1 curves this should be unreachable
+            // so we unwrap.
+            let n = py.detach(|| deriver.derive(b)).unwrap();
             assert_eq!(n, b.len());
             Ok(())
         })?)
@@ -341,8 +331,12 @@ impl ECPrivateKey {
         // `PyBytes::new_with` because the exact length of the signature isn't
         // easily known a priori (if `r` or `s` has a leading 0, the signature
         // will be a byte or two shorter than the maximum possible length).
-        let mut sig = vec![];
-        signer.sign_to_vec(data.as_bytes(), &mut sig)?;
+        let data_bytes = data.as_bytes();
+        let sig = py.detach(|| {
+            let mut sig = vec![];
+            signer.sign_to_vec(data_bytes, &mut sig)?;
+            Ok::<_, openssl::error::ErrorStack>(sig)
+        })?;
         Ok(pyo3::types::PyBytes::new(py, &sig))
     }
 
@@ -388,8 +382,8 @@ impl ECPrivateKey {
     fn private_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PrivateFormat,
         encryption_algorithm: &pyo3::Bound<'p, pyo3::PyAny>,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         utils::pkey_private_bytes(
@@ -423,7 +417,13 @@ impl ECPublicKey {
     ) -> CryptographyResult<ECPublicKey> {
         let ec = pkey.ec_key()?;
         check_key_infinity(&ec)?;
-
+        let mut bn_ctx = openssl::bn::BigNumContext::new()?;
+        let mut cofactor = openssl::bn::BigNum::new()?;
+        ec.group().cofactor(&mut cofactor, &mut bn_ctx)?;
+        let one = openssl::bn::BigNum::from_u32(1)?;
+        // We only support curves with a cofactor of 1.
+        // Any change here requires more careful key checking
+        assert_eq!(cofactor, one, "cofactor must be 1");
         Ok(ECPublicKey { pkey, curve })
     }
 }
@@ -495,9 +495,9 @@ impl ECPublicKey {
 
         let mut verifier = openssl::pkey_ctx::PkeyCtx::new(&self.pkey)?;
         verifier.verify_init()?;
-        let valid = verifier
-            .verify(data.as_bytes(), signature.as_bytes())
-            .unwrap_or(false);
+        let data_bytes = data.as_bytes();
+        let sig_bytes = signature.as_bytes();
+        let valid = py.detach(|| verifier.verify(data_bytes, sig_bytes).unwrap_or(false));
         if !valid {
             return Err(CryptographyError::from(
                 exceptions::InvalidSignature::new_err(()),
@@ -531,8 +531,8 @@ impl ECPublicKey {
     fn public_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PublicFormat,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         utils::pkey_public_bytes(py, slf, &slf.borrow().pkey, encoding, format, true, false)
     }
@@ -627,7 +627,7 @@ impl EllipticCurvePrivateNumbers {
 
         let mut bn_ctx = openssl::bn::BigNumContext::new()?;
         let mut expected_pub = openssl::ec::EcPoint::new(&curve)?;
-        expected_pub.mul_generator(&curve, &private_value, &bn_ctx)?;
+        expected_pub.mul_generator2(&curve, &private_value, &mut bn_ctx)?;
         if !expected_pub.eq(&curve, public_key.public_key(), &mut bn_ctx)? {
             return Err(CryptographyError::from(
                 pyo3::exceptions::PyValueError::new_err("Invalid EC key."),

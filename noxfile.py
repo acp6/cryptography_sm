@@ -24,18 +24,28 @@ nox.options.reuse_existing_virtualenvs = True
 nox.options.default_venv_backend = "uv"
 
 
+# See RUST_LOG in .github/workflows/ci.yml
+UV_RUST_LOG = (
+    "uv=debug,uv_client::cached_client=warn,"
+    "uv_client::registry_client=error,uv_resolver::resolver=warn"
+)
+
+
 def install(
     session: nox.Session,
     *args: str,
     verbose: bool = True,
 ) -> None:
+    env = {}
     if verbose:
         args += ("-v",)
+        env["RUST_LOG"] = UV_RUST_LOG
     session.install(
         "-c",
         "ci-constraints-requirements.txt",
         *args,
         silent=False,
+        env=env,
     )
 
 
@@ -50,11 +60,12 @@ def load_pyproject_toml() -> dict:
 @nox.session(name="tests-nocoverage")
 @nox.session(name="tests-rust-debug")
 def tests(session: nox.Session) -> None:
-    extras = "test"
+    extras = []
+    groups = ["test"]
     if session.name == "tests-ssh":
-        extras += ",ssh"
+        extras.append("ssh")
     if session.name == "tests-randomorder":
-        extras += ",test-randomorder"
+        groups = ["test-randomorder"]
 
     prof_location = (
         pathlib.Path(".") / ".rust-cov" / str(uuid.uuid4())
@@ -69,15 +80,21 @@ def tests(session: nox.Session) -> None:
             }
         )
 
+    install_spec = f".[{','.join(extras)}]"
     install(session, "-e", "./vectors")
     if session.name == "tests-rust-debug":
         install(
             session,
             "--config-settings-package=cryptography:build-args=--profile=dev",
-            f".[{extras}]",
+            install_spec,
         )
     else:
-        install(session, f".[{extras}]")
+        install(session, install_spec)
+
+    install(
+        session,
+        *itertools.chain.from_iterable(("--group", g) for g in groups),
+    )
 
     session.run("uv", "pip", "list")
 
@@ -89,11 +106,6 @@ def tests(session: nox.Session) -> None:
     else:
         cov_args = []
 
-    if session.posargs:
-        tests = session.posargs
-    else:
-        tests = ["tests/"]
-
     session.run(
         "pytest",
         "-n",
@@ -101,7 +113,7 @@ def tests(session: nox.Session) -> None:
         "--dist=worksteal",
         *cov_args,
         "--durations=10",
-        *tests,
+        *session.posargs,
     )
 
     if session.name != "tests-nocoverage":
@@ -114,7 +126,16 @@ def tests(session: nox.Session) -> None:
 
 @nox.session
 def docs(session: nox.Session) -> None:
-    install(session, ".[docs,docstest,sdist,ssh]")
+    install(session, ".[ssh]")
+    install(
+        session,
+        "--group",
+        "docs",
+        "--group",
+        "docstest",
+        "--group",
+        "sdist",
+    )
 
     temp_dir = session.create_tmp()
     session.run(
@@ -176,7 +197,7 @@ def docs(session: nox.Session) -> None:
 
 @nox.session(name="docs-linkcheck")
 def docs_linkcheck(session: nox.Session) -> None:
-    install(session, ".[docs]")
+    install(session, ".", "--group", "docs")
 
     session.run(
         "sphinx-build", "-W", "-b", "linkcheck", "docs", "docs/_build/html"
@@ -192,10 +213,13 @@ def flake(session: nox.Session) -> None:
     install(
         session,
         *pyproject_data["build-system"]["requires"],
-        *pyproject_data["project"]["optional-dependencies"]["pep8test"],
-        *pyproject_data["project"]["optional-dependencies"]["test"],
         *pyproject_data["project"]["optional-dependencies"]["ssh"],
-        *pyproject_data["project"]["optional-dependencies"]["nox"],
+        "--group",
+        "pep8test",
+        "--group",
+        "test",
+        "--group",
+        "nox",
     )
 
     session.run("ruff", "check")
@@ -277,10 +301,10 @@ def local(session: nox.Session):
     install(
         session,
         *pyproject_data["build-system"]["requires"],
-        *pyproject_data["project"]["optional-dependencies"]["pep8test"],
-        *pyproject_data["project"]["optional-dependencies"]["test"],
         *pyproject_data["project"]["optional-dependencies"]["ssh"],
-        *pyproject_data["project"]["optional-dependencies"]["nox"],
+        *nox.project.dependency_groups(
+            pyproject_data, "pep8test", "test", "nox"
+        ),
         verbose=False,
     )
 
@@ -315,18 +339,13 @@ def local(session: nox.Session):
         "--uv",
     )
 
-    if session.posargs:
-        tests = session.posargs
-    else:
-        tests = ["tests/"]
-
     session.run(
         "pytest",
         "-n",
         "auto",
         "--dist=worksteal",
         "--durations=10",
-        *tests,
+        *session.posargs,
     )
 
     session.run("cargo", "test", "--all", external=True)

@@ -222,19 +222,17 @@ fn sm2_pkcs7_verify(
 #[pyo3(signature = (encoding, sig, msg, certs, options))]
 fn pkcs7_verify(
     py: pyo3::Python<'_>,
-    encoding: pyo3::Bound<'_, pyo3::PyAny>,
+    encoding: crate::serialization::Encoding,
     sig: &[u8],
     msg: Option<CffiBuf<'_>>,
     certs: Vec<pyo3::Py<PyCertificate>>,
     options: pyo3::Bound<'_, pyo3::types::PyList>,
 ) -> CryptographyResult<()> {
     // Convert to DER for SM2 detection
-    let der_bytes = if encoding.is(&types::ENCODING_DER.get(py)?) {
-        sig.to_vec()
-    } else if encoding.is(&types::ENCODING_PEM.get(py)?) {
-        openssl::pkcs7::Pkcs7::from_pem(sig)?.to_der()?
-    } else {
-        openssl::pkcs7::Pkcs7::from_smime(sig)?.0.to_der()?
+    let der_bytes = match encoding {
+        crate::serialization::Encoding::DER => sig.to_vec(),
+        crate::serialization::Encoding::PEM => openssl::pkcs7::Pkcs7::from_pem(sig)?.to_der()?,
+        _ => openssl::pkcs7::Pkcs7::from_smime(sig)?.0.to_der()?,
     };
 
     // If any signer uses SM2, use custom verification path
@@ -243,12 +241,10 @@ fn pkcs7_verify(
     }
 
     // Non-SM2: use OpenSSL's PKCS7_verify
-    let p7 = if encoding.is(&types::ENCODING_DER.get(py)?) {
-        openssl::pkcs7::Pkcs7::from_der(sig)?
-    } else if encoding.is(&types::ENCODING_PEM.get(py)?) {
-        openssl::pkcs7::Pkcs7::from_pem(sig)?
-    } else {
-        openssl::pkcs7::Pkcs7::from_smime(sig)?.0
+    let p7 = match encoding {
+        crate::serialization::Encoding::DER => openssl::pkcs7::Pkcs7::from_der(sig)?,
+        crate::serialization::Encoding::PEM => openssl::pkcs7::Pkcs7::from_pem(sig)?,
+        _ => openssl::pkcs7::Pkcs7::from_smime(sig)?.0,
     };
 
     let mut flags = openssl::pkcs7::Pkcs7Flags::empty();

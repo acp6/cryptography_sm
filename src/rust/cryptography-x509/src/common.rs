@@ -57,10 +57,25 @@ pub enum AlgorithmParameters<'a> {
     #[defined_by(oid::ED448_OID)]
     Ed448,
 
+    #[defined_by(oid::ML_DSA_44_OID)]
+    MlDsa44,
+    #[defined_by(oid::ML_DSA_65_OID)]
+    MlDsa65,
+    #[defined_by(oid::ML_DSA_87_OID)]
+    MlDsa87,
+
     #[defined_by(oid::X25519_OID)]
     X25519,
     #[defined_by(oid::X448_OID)]
     X448,
+
+    #[defined_by(oid::ML_KEM_768_OID)]
+    MlKem768,
+    #[defined_by(oid::ML_KEM_1024_OID)]
+    MlKem1024,
+
+    #[defined_by(oid::UNSIGNED_OID)]
+    Unsigned,
 
     // These encodings are only used in SPKI AlgorithmIdentifiers.
     #[defined_by(oid::EC_OID)]
@@ -69,18 +84,14 @@ pub enum AlgorithmParameters<'a> {
     #[defined_by(oid::RSA_OID)]
     Rsa(Option<asn1::Null>),
 
-    // These ECDSA algorithms should have no parameters,
-    // but Java 11 (up to at least 11.0.19) encodes them
-    // with NULL parameters. The JDK team is looking to
-    // backport the fix as of June 2023.
     #[defined_by(oid::ECDSA_WITH_SHA224_OID)]
-    EcDsaWithSha224(Option<asn1::Null>),
+    EcDsaWithSha224,
     #[defined_by(oid::ECDSA_WITH_SHA256_OID)]
-    EcDsaWithSha256(Option<asn1::Null>),
+    EcDsaWithSha256,
     #[defined_by(oid::ECDSA_WITH_SHA384_OID)]
-    EcDsaWithSha384(Option<asn1::Null>),
+    EcDsaWithSha384,
     #[defined_by(oid::ECDSA_WITH_SHA512_OID)]
-    EcDsaWithSha512(Option<asn1::Null>),
+    EcDsaWithSha512,
 
     #[defined_by(oid::ECDSA_WITH_SHA3_224_OID)]
     EcDsaWithSha3_224,
@@ -128,13 +139,13 @@ pub enum AlgorithmParameters<'a> {
     Dsa(DssParams<'a>),
 
     #[defined_by(oid::DSA_WITH_SHA224_OID)]
-    DsaWithSha224(Option<asn1::Null>),
+    DsaWithSha224,
     #[defined_by(oid::DSA_WITH_SHA256_OID)]
-    DsaWithSha256(Option<asn1::Null>),
+    DsaWithSha256,
     #[defined_by(oid::DSA_WITH_SHA384_OID)]
-    DsaWithSha384(Option<asn1::Null>),
+    DsaWithSha384,
     #[defined_by(oid::DSA_WITH_SHA512_OID)]
-    DsaWithSha512(Option<asn1::Null>),
+    DsaWithSha512,
 
     #[defined_by(oid::DH_OID)]
     Dh(DHXParams<'a>),
@@ -264,6 +275,7 @@ impl<'a> asn1::Asn1Readable<'a> for RawTlv<'a> {
     }
 }
 impl asn1::Asn1Writable for RawTlv<'_> {
+    type Error = asn1::WriteError;
     fn write(&self, w: &mut asn1::Writer<'_>) -> asn1::WriteResult {
         w.write_tlv(self.tag, Some(self.value.len()), move |dest| {
             dest.push_slice(self.value)
@@ -323,9 +335,12 @@ impl<'a, T: asn1::SimpleAsn1Readable<'a>, U> asn1::SimpleAsn1Readable<'a>
     }
 }
 
-impl<T: asn1::SimpleAsn1Writable, U: asn1::SimpleAsn1Writable> asn1::SimpleAsn1Writable
-    for Asn1ReadableOrWritable<T, U>
+impl<
+        T: asn1::SimpleAsn1Writable<Error = asn1::WriteError>,
+        U: asn1::SimpleAsn1Writable<Error = asn1::WriteError>,
+    > asn1::SimpleAsn1Writable for Asn1ReadableOrWritable<T, U>
 {
+    type Error = asn1::WriteError;
     const TAG: asn1::Tag = U::TAG;
     fn write_data(&self, w: &mut asn1::WriteBuf) -> asn1::WriteResult {
         match self {
@@ -663,6 +678,7 @@ impl<'a> asn1::SimpleAsn1Readable<'a> for UnvalidatedVisibleString<'a> {
 }
 
 impl asn1::SimpleAsn1Writable for UnvalidatedVisibleString<'_> {
+    type Error = asn1::WriteError;
     const TAG: asn1::Tag = asn1::VisibleString::TAG;
     fn write_data(&self, _: &mut asn1::WriteBuf) -> asn1::WriteResult {
         unimplemented!();
@@ -683,6 +699,7 @@ impl<'a> Utf8StoredBMPString<'a> {
 }
 
 impl asn1::SimpleAsn1Writable for Utf8StoredBMPString<'_> {
+    type Error = asn1::WriteError;
     const TAG: asn1::Tag = asn1::BMPString::TAG;
     fn write_data(&self, writer: &mut asn1::WriteBuf) -> asn1::WriteResult {
         for ch in self.0.encode_utf16() {
@@ -698,13 +715,21 @@ impl asn1::SimpleAsn1Writable for Utf8StoredBMPString<'_> {
 
 #[derive(Clone)]
 pub struct WithTlv<'a, T> {
-    tlv: asn1::Tlv<'a>,
+    tlv: Option<asn1::Tlv<'a>>,
     value: T,
 }
 
 impl<'a, T> WithTlv<'a, T> {
+    /// Constructs a value that was not parsed, and therefore has no TLV.
+    /// Calling `tlv()` on it will panic.
+    pub fn new(value: T) -> Self {
+        Self { tlv: None, value }
+    }
+
     pub fn tlv(&self) -> &asn1::Tlv<'a> {
-        &self.tlv
+        self.tlv
+            .as_ref()
+            .expect("tlv() may only be called on parsed values")
     }
 }
 
@@ -720,7 +745,7 @@ impl<'a, T: asn1::Asn1Readable<'a>> asn1::Asn1Readable<'a> for WithTlv<'a, T> {
     fn parse(p: &mut asn1::Parser<'a>) -> asn1::ParseResult<Self> {
         let tlv = p.read_element::<asn1::Tlv<'a>>()?;
         Ok(Self {
-            tlv,
+            tlv: Some(tlv),
             value: tlv.parse()?,
         })
     }
@@ -731,7 +756,8 @@ impl<'a, T: asn1::Asn1Readable<'a>> asn1::Asn1Readable<'a> for WithTlv<'a, T> {
 }
 
 impl<T: asn1::Asn1Writable> asn1::Asn1Writable for WithTlv<'_, T> {
-    fn write(&self, w: &mut asn1::Writer<'_>) -> asn1::WriteResult<()> {
+    type Error = T::Error;
+    fn write(&self, w: &mut asn1::Writer<'_>) -> Result<(), T::Error> {
         self.value.write(w)
     }
 

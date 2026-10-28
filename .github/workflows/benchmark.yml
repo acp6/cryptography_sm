@@ -17,17 +17,21 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
+env:
+  # See RUST_LOG in ci.yml
+  RUST_LOG: uv=debug,uv_client::cached_client=warn,uv_client::registry_client=error,uv_resolver::resolver=warn
+
 jobs:
   benchmark:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 3
         with:
           persist-credentials: false
           path: "cryptography-pr"
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 3
         with:
           persist-credentials: false
@@ -39,19 +43,22 @@ jobs:
         uses: ./cryptography-base/.github/actions/fetch-vectors
 
       - name: Setup python
-        id: setup-python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
+          version-file: cryptography-pr/ci-constraints-requirements.txt
           python-version: "3.11"
+          enable-cache: false
 
       - name: Create virtualenv (base)
         run: |
-          python -m venv .venv-base
-          .venv-base/bin/pip install -v -c ./cryptography-base/ci-constraints-requirements.txt "./cryptography-base[test]" ./cryptography-base/vectors/
+          uv venv .venv-base
+          . .venv-base/bin/activate
+          uv pip install -v -c ./cryptography-base/ci-constraints-requirements.txt ./cryptography-base ./cryptography-base/vectors/ --group ./cryptography-base/pyproject.toml:test
       - name: Create virtualenv (PR)
         run: |
-          python -m venv .venv-pr
-          .venv-pr/bin/pip install -v -c ./cryptography-pr/ci-constraints-requirements.txt "./cryptography-pr[test]" ./cryptography-pr/vectors/
+          uv venv .venv-pr
+          . .venv-pr/bin/activate
+          uv pip install -v -c ./cryptography-pr/ci-constraints-requirements.txt ./cryptography-pr ./cryptography-pr/vectors/ --group ./cryptography-pr/pyproject.toml:test
 
       - name: Run benchmarks (base)
         run: .venv-base/bin/pytest --benchmark-enable --benchmark-only ./cryptography-pr/tests/bench/ --benchmark-json=bench-base.json --x509-limbo-root=x509-limbo/
@@ -59,4 +66,4 @@ jobs:
         run: .venv-pr/bin/pytest --benchmark-enable --benchmark-only ./cryptography-pr/tests/bench/ --benchmark-json=bench-pr.json --x509-limbo-root=x509-limbo/
 
       - name: Compare results
-        run: python ./cryptography-pr/.github/bin/compare_benchmarks.py bench-base.json bench-pr.json | tee -a $GITHUB_STEP_SUMMARY
+        run: .venv-pr/bin/python ./cryptography-pr/.github/bin/compare_benchmarks.py bench-base.json bench-pr.json | tee -a $GITHUB_STEP_SUMMARY

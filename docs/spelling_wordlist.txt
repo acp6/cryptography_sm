@@ -5,6 +5,7 @@ argon2
 argon2id
 Authenticator
 authenticator
+Authenticode
 AVX
 backend
 Backends
@@ -23,6 +24,7 @@ CentOS
 changelog
 Changelog
 ciphertext
+Cobblestone
 codebook
 committer
 committers
@@ -33,10 +35,16 @@ criticalities
 crypto
 cryptographic
 cryptographically
+Cygwin
 de
 Debian
 deallocated
+decapsulate
+Decapsulate
+Decapsulation
+declaratively
 decrypt
+Decryptor
 decrypts
 Decrypts
 decrypted
@@ -49,7 +57,6 @@ deserialized
 Deserialization
 deserializing
 Diffie
-Diffie
 disambiguating
 Django
 Docstrings
@@ -57,6 +64,7 @@ duplicative
 El
 embeddability
 Encodings
+Encryptor
 endian
 Euler
 extendable
@@ -64,10 +72,13 @@ facto
 fallback
 Fernet
 fernet
+FFDH
 FIPS
 Gaynor
+GiB
 Google
 Graviola
+hasher
 hazmat
 Heartbleed
 Homebrew
@@ -85,6 +96,7 @@ iterable
 Kehrer
 Kerberos
 Keychain
+keystream
 KiB
 kibibyte
 kibibytes
@@ -115,6 +127,7 @@ parsers
 Parsers
 PEM
 PHC
+PiB
 pickleable
 plaintext
 Poly
@@ -159,8 +172,11 @@ tunable
 Ubuntu
 unencrypted
 unicode
+uninstantiated
 unpadded
+untrusted
 unpadding
+unsafety
 validator
 Ventura
 verifier

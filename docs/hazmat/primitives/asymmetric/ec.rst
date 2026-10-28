@@ -406,87 +406,6 @@ All named curves are instances of :class:`EllipticCurve`.
     See :doc:`sm2` for detailed usage, including X.509 certificates, CRL, and
     OCSP with SM2.
 
-.. class:: SECT571K1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect571k1``. Also called NIST K-571. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT409K1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect409k1``. Also called NIST K-409. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT283K1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect283k1``. Also called NIST K-283. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT233K1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect233k1``. Also called NIST K-233. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT163K1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect163k1``. Also called NIST K-163. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT571R1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect571r1``. Also called NIST B-571. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT409R1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect409r1``. Also called NIST B-409. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT283R1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect283r1``. Also called NIST B-283. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT233R1
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect233r1``. Also called NIST B-233. These binary curves are
-    discouraged for new systems.
-
-
-.. class:: SECT163R2
-
-    .. versionadded:: 0.5
-
-    SECG curve ``sect163r2``. Also called NIST B-163. These binary curves are
-    discouraged for new systems.
-
-
-
 
 Key Interfaces
 ~~~~~~~~~~~~~~
@@ -847,66 +766,6 @@ Elliptic Curve Object Identifiers
 
         Corresponds to the dotted string ``"1.2.156.10197.1.301"``.
 
-    .. attribute:: SECT163K1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.1"``.
-
-    .. attribute:: SECT163R2
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.15"``.
-
-    .. attribute:: SECT233K1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.26"``.
-
-    .. attribute:: SECT233R1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.27"``.
-
-    .. attribute:: SECT283K1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.16"``.
-
-    .. attribute:: SECT283R1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.17"``.
-
-    .. attribute:: SECT409K1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.36"``.
-
-    .. attribute:: SECT409R1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.37"``.
-
-    .. attribute:: SECT571K1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.38"``.
-
-    .. attribute:: SECT571R1
-
-        .. versionadded:: 2.5
-
-        Corresponds to the dotted string ``"1.3.132.0.39"``.
-
 .. function:: get_curve_for_oid(oid)
 
     .. versionadded:: 2.6
@@ -928,7 +787,7 @@ Elliptic Curve Object Identifiers
 .. _`800-56A`: https://csrc.nist.gov/pubs/sp/800/56/a/r3/final
 .. _`some concern`: https://crypto.stackexchange.com/questions/10263/should-we-trust-the-nist-recommended-ecc-parameters
 .. _`less than 224 bits`: https://www.cosic.esat.kuleuven.be/ecrypt/ecrypt2/documents/D.SPA.20.pdf
-.. _`elliptic curve diffie-hellman is faster than diffie-hellman`: https://digitalcommons.unl.edu/cgi/viewcontent.cgi?article=1100&context=cseconfwork
+.. _`elliptic curve diffie-hellman is faster than diffie-hellman`: https://digitalcommons.unl.edu/cseconfwork/105/
 .. _`minimize the number of security concerns for elliptic-curve cryptography`: https://cr.yp.to/ecdh/curve25519-20060209.pdf
 .. _`SafeCurves`: https://safecurves.cr.yp.to/
 .. _`ECDSA`: https://en.wikipedia.org/wiki/ECDSA

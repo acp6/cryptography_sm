@@ -43,6 +43,16 @@ pub(crate) fn load_der_x509_crl(
         ));
     }
 
+    if owned.borrow_dependent().tbs_cert_list.signature
+        != owned.borrow_dependent().signature_algorithm
+    {
+        return Err(CryptographyError::from(
+            pyo3::exceptions::PyValueError::new_err(
+                "Inner and outer signature algorithms do not match. This is an invalid CRL.",
+            ),
+        ));
+    }
+
     Ok(CertificateRevocationList {
         owned,
         revoked_certs: pyo3::sync::PyOnceLock::new(),
@@ -72,7 +82,7 @@ pub(crate) fn load_pem_x509_crl(
 }
 
 self_cell::self_cell!(
-    struct OwnedCertificateRevocationList {
+    pub(crate) struct OwnedCertificateRevocationList {
         owner: pyo3::Py<pyo3::types::PyBytes>,
         #[covariant]
         dependent: RawCertificateRevocationList,
@@ -81,7 +91,7 @@ self_cell::self_cell!(
 
 #[pyo3::pyclass(frozen, module = "cryptography.hazmat.bindings._rust.x509")]
 pub(crate) struct CertificateRevocationList {
-    owned: OwnedCertificateRevocationList,
+    pub(crate) owned: OwnedCertificateRevocationList,
 
     revoked_certs: pyo3::sync::PyOnceLock<Vec<OwnedRevokedCertificate>>,
     cached_extensions: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::PyAny>>,
@@ -190,7 +200,7 @@ impl CertificateRevocationList {
         let data = self.public_bytes_der()?;
 
         let mut h = Hash::new(py, &algorithm, None)?;
-        h.update_bytes(&data)?;
+        h.update_bytes(py, &data)?;
         Ok(h.finalize(py)?)
     }
 
@@ -241,11 +251,11 @@ impl CertificateRevocationList {
     fn public_bytes<'p>(
         &self,
         py: pyo3::Python<'p>,
-        encoding: pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         let result = asn1::write_single(self.owned.borrow_dependent())?;
 
-        encode_der_data(py, "X509 CRL".to_string(), result, &encoding)
+        encode_der_data(py, "X509 CRL".to_string(), result, encoding)
     }
 
     #[getter]
@@ -412,12 +422,6 @@ impl CertificateRevocationList {
         py: pyo3::Python<'p>,
         public_key: pyo3::Bound<'p, pyo3::PyAny>,
     ) -> CryptographyResult<bool> {
-        if slf.owned.borrow_dependent().tbs_cert_list.signature
-            != slf.owned.borrow_dependent().signature_algorithm
-        {
-            return Ok(false);
-        };
-
         // Error on invalid public key -- below we treat any error as just
         // being an invalid signature.
         sign::identify_public_key_type(py, public_key.clone())?;
@@ -686,7 +690,7 @@ pub fn parse_crl_entry_ext<'p>(
             Ok(Some(types::CERTIFICATE_ISSUER.get(py)?.call1((gns,))?))
         }
         oid::INVALIDITY_DATE_OID => {
-            let time = ext.value::<asn1::GeneralizedTime>()?;
+            let time = ext.value::<asn1::X509GeneralizedTime>()?;
             let py_dt = x509::datetime_to_py(py, time.as_datetime())?;
             Ok(Some(types::INVALIDITY_DATE.get(py)?.call1((py_dt,))?))
         }

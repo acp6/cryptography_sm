@@ -6,7 +6,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use cryptography_x509::certificate::Certificate as RawCertificate;
-use cryptography_x509::common::{AlgorithmParameters, Asn1Read, Asn1ReadableOrWritable};
+use cryptography_x509::common::{Asn1Read, Asn1ReadableOrWritable};
 use cryptography_x509::extensions::{
     Admission, Admissions, AuthorityKeyIdentifier, BasicConstraints, DisplayText,
     DistributionPoint, DistributionPointName, DuplicateExtensionsError, ExtendedKeyUsage,
@@ -41,6 +41,9 @@ self_cell::self_cell!(
 pub(crate) struct Certificate {
     pub(crate) raw: OwnedCertificate,
     pub(crate) cached_extensions: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::PyAny>>,
+    pub(crate) cached_issuer: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::PyAny>>,
+    pub(crate) cached_subject: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::PyAny>>,
+    pub(crate) cached_public_key: pyo3::sync::PyOnceLock<pyo3::Py<pyo3::PyAny>>,
 }
 
 #[pyo3::pymethods]
@@ -78,10 +81,17 @@ impl Certificate {
         &self,
         py: pyo3::Python<'p>,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::PyAny>> {
-        keys::load_der_public_key_bytes(
-            py,
-            self.raw.borrow_dependent().tbs_cert.spki.tlv().full_data(),
-        )
+        Ok(self
+            .cached_public_key
+            .get_or_try_init(py, || {
+                keys::load_der_public_key_bytes(
+                    py,
+                    self.raw.borrow_dependent().tbs_cert.spki.tlv().full_data(),
+                )
+                .map(|v| v.unbind())
+            })?
+            .bind(py)
+            .clone())
     }
 
     #[getter]
@@ -103,14 +113,14 @@ impl Certificate {
         let serialized = asn1::write_single(self.raw.borrow_dependent())?;
 
         let mut h = hashes::Hash::new(py, algorithm, None)?;
-        h.update_bytes(&serialized)?;
+        h.update_bytes(py, &serialized)?;
         h.finalize(py)
     }
 
     fn public_bytes<'p>(
         &self,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         let result = asn1::write_single(self.raw.borrow_dependent())?;
 
@@ -138,14 +148,28 @@ impl Certificate {
 
     #[getter]
     fn issuer<'p>(&self, py: pyo3::Python<'p>) -> pyo3::PyResult<pyo3::Bound<'p, pyo3::PyAny>> {
-        Ok(x509::parse_name(py, self.raw.borrow_dependent().issuer())
-            .map_err(|e| e.add_location(asn1::ParseLocation::Field("issuer")))?)
+        Ok(self
+            .cached_issuer
+            .get_or_try_init(py, || {
+                x509::parse_name(py, self.raw.borrow_dependent().issuer())
+                    .map_err(|e| e.add_location(asn1::ParseLocation::Field("issuer")))
+                    .map(|v| v.unbind())
+            })?
+            .bind(py)
+            .clone())
     }
 
     #[getter]
     fn subject<'p>(&self, py: pyo3::Python<'p>) -> pyo3::PyResult<pyo3::Bound<'p, pyo3::PyAny>> {
-        Ok(x509::parse_name(py, self.raw.borrow_dependent().subject())
-            .map_err(|e| e.add_location(asn1::ParseLocation::Field("subject")))?)
+        Ok(self
+            .cached_subject
+            .get_or_try_init(py, || {
+                x509::parse_name(py, self.raw.borrow_dependent().subject())
+                    .map_err(|e| e.add_location(asn1::ParseLocation::Field("subject")))
+                    .map(|v| v.unbind())
+            })?
+            .bind(py)
+            .clone())
     }
 
     #[getter]
@@ -193,7 +217,7 @@ impl Certificate {
             Err(DuplicateExtensionsError(oid)) => {
                 let oid_obj = oid_to_py_oid(py, &oid)?;
                 Err(exceptions::DuplicateExtension::new_err((
-                    format!("Duplicate {} extension found", &oid),
+                    format!("Duplicate {} extension found", oid),
                     oid_obj.unbind(),
                 ))
                 .into())
@@ -429,18 +453,13 @@ pub(crate) fn load_der_x509_certificate(
     // determine if the serial is not positive and raise a warning if it is. We
     // want to drop support for this sort of invalid encoding eventually.
     warn_if_not_positive(py, raw.borrow_dependent().tbs_cert.serial.as_bytes())?;
-    // determine if the signature algorithm has incorrect parameters and raise a warning if it
-    // does. this is a bug in the JDK and we want to drop support for it eventually.
-    // ECDSA was fixed in Java 16, DSA in Java 21.
-    warn_if_invalid_params(py, raw.borrow_dependent().signature_alg.params.clone())?;
-    warn_if_invalid_params(
-        py,
-        raw.borrow_dependent().tbs_cert.signature_alg.params.clone(),
-    )?;
 
     Ok(Certificate {
         raw,
         cached_extensions: pyo3::sync::PyOnceLock::new(),
+        cached_issuer: pyo3::sync::PyOnceLock::new(),
+        cached_subject: pyo3::sync::PyOnceLock::new(),
+        cached_public_key: pyo3::sync::PyOnceLock::new(),
     })
 }
 
@@ -449,30 +468,6 @@ fn warn_if_not_positive(py: pyo3::Python<'_>, bytes: &[u8]) -> pyo3::PyResult<()
         let warning_cls = types::DEPRECATED_IN_36.get(py)?;
         let message = c"Parsed a serial number which wasn't positive (i.e., it was negative or zero), which is disallowed by RFC 5280. Loading this certificate will cause an exception in a future release of cryptography.";
         pyo3::PyErr::warn(py, &warning_cls, message, 1)?;
-    }
-    Ok(())
-}
-
-fn warn_if_invalid_params(
-    py: pyo3::Python<'_>,
-    params: AlgorithmParameters<'_>,
-) -> pyo3::PyResult<()> {
-    match params {
-        AlgorithmParameters::EcDsaWithSha224(Some(..))
-        | AlgorithmParameters::EcDsaWithSha256(Some(..))
-        | AlgorithmParameters::EcDsaWithSha384(Some(..))
-        | AlgorithmParameters::EcDsaWithSha512(Some(..))
-        | AlgorithmParameters::DsaWithSha224(Some(..))
-        | AlgorithmParameters::DsaWithSha256(Some(..))
-        | AlgorithmParameters::DsaWithSha384(Some(..))
-        | AlgorithmParameters::DsaWithSha512(Some(..)) => {
-            // This can also be triggered by an Intel On Die certificate
-            // https://github.com/pyca/cryptography/issues/11723
-            let warning_cls = types::DEPRECATED_IN_41.get(py)?;
-            let message = c"The parsed certificate contains a NULL parameter value in its signature algorithm parameters. This is invalid and will be rejected in a future version of cryptography. If this certificate was created via Java, please upgrade to JDK21+ or the latest JDK11/17 once a fix is issued. If this certificate was created in some other fashion please report the issue to the cryptography issue tracker. See https://github.com/pyca/cryptography/issues/8996 and https://github.com/pyca/cryptography/issues/9253 for more details.";
-            pyo3::PyErr::warn(py, &warning_cls, message, 2)?;
-        }
-        _ => {}
     }
     Ok(())
 }
@@ -670,10 +665,10 @@ pub(crate) fn encode_distribution_point_reasons(
             .extract::<usize>()?;
         set_bit(&mut bits, bit, true);
     }
-    if bits[1] == 0 {
-        bits.truncate(1);
+    while bits.last() == Some(&0) {
+        bits.pop();
     }
-    let unused_bits = bits.last().unwrap().trailing_zeros() as u8;
+    let unused_bits = bits.last().map_or(0, |b| b.trailing_zeros() as u8);
     Ok(asn1::OwnedBitString::new(bits, unused_bits).unwrap())
 }
 
@@ -1014,19 +1009,48 @@ pub(crate) fn create_x509_certificate(
     rsa_padding: &pyo3::Bound<'_, pyo3::PyAny>,
     ecdsa_deterministic: Option<bool>,
 ) -> CryptographyResult<Certificate> {
-    let sigalg = x509::sign::compute_signature_algorithm(
-        py,
-        private_key.clone(),
-        hash_algorithm.clone(),
-        rsa_padding.clone(),
-    )?;
+    let sigalg = if private_key.is_none() {
+        common::AlgorithmIdentifier {
+            oid: asn1::DefinedByMarker::marker(),
+            params: common::AlgorithmParameters::Unsigned,
+        }
+    } else {
+        x509::sign::compute_signature_algorithm(
+            py,
+            private_key.clone(),
+            hash_algorithm.clone(),
+            rsa_padding.clone(),
+        )?
+    };
 
-    let der = types::ENCODING_DER.get(py)?;
-    let spki = types::PUBLIC_FORMAT_SUBJECT_PUBLIC_KEY_INFO.get(py)?;
     let spki_bytes = builder
         .getattr(pyo3::intern!(py, "_public_key"))?
-        .call_method1(pyo3::intern!(py, "public_bytes"), (der, spki))?
+        .call_method1(
+            pyo3::intern!(py, "public_bytes"),
+            (
+                crate::serialization::Encoding::DER,
+                crate::serialization::PublicFormat::SubjectPublicKeyInfo,
+            ),
+        )?
         .extract::<pyo3::pybacked::PyBackedBytes>()?;
+
+    let py_public_key_rsa_padding =
+        builder.getattr(pyo3::intern!(py, "_public_key_rsa_padding"))?;
+    let spki = if py_public_key_rsa_padding.is_none() {
+        asn1::parse_single(&spki_bytes)?
+    } else {
+        // The Python layer ensures this is only ever the PSS class.
+        let spki = asn1::parse_single::<common::SubjectPublicKeyInfo<'_>>(&spki_bytes)?;
+        // id-RSASSA-PSS with the parameters absent (the unrestricted form
+        // from RFC 4055).
+        common::WithTlv::new(common::SubjectPublicKeyInfo {
+            algorithm: common::AlgorithmIdentifier {
+                oid: asn1::DefinedByMarker::marker(),
+                params: common::AlgorithmParameters::RsaPss(None),
+            },
+            subject_public_key: spki.subject_public_key,
+        })
+    };
 
     let py_serial = builder
         .getattr(pyo3::intern!(py, "_serial_number"))?
@@ -1061,7 +1085,7 @@ pub(crate) fn create_x509_certificate(
             not_after: time_from_py(py, &py_not_after)?,
         },
         subject: x509::common::encode_name(py, &ka, &py_subject_name)?,
-        spki: asn1::parse_single(&spki_bytes)?,
+        spki,
         issuer_unique_id: None,
         subject_unique_id: None,
         raw_extensions: x509::common::encode_extensions(
@@ -1073,19 +1097,25 @@ pub(crate) fn create_x509_certificate(
         )?,
     };
 
-    let tbs_bytes = asn1::write_single(&tbs_cert)?;
-    let signature = x509::sign::sign_data(
-        py,
-        private_key.clone(),
-        hash_algorithm.clone(),
-        rsa_padding.clone(),
-        ecdsa_deterministic,
-        &tbs_bytes,
-    )?;
+    let sig_bytes = if private_key.is_none() {
+        None
+    } else {
+        let tbs_bytes = asn1::write_single(&tbs_cert)?;
+        Some(x509::sign::sign_data(
+            py,
+            private_key.clone(),
+            hash_algorithm.clone(),
+            rsa_padding.clone(),
+            ecdsa_deterministic,
+            &tbs_bytes,
+        )?)
+    };
+    let signature = sig_bytes.as_deref().unwrap_or(b"");
+
     let data = asn1::write_single(&cryptography_x509::certificate::Certificate {
         tbs_cert,
         signature_alg: sigalg,
-        signature: asn1::BitString::new(&signature, 0).unwrap(),
+        signature: asn1::BitString::new(signature, 0).unwrap(),
     })?;
     load_der_x509_certificate(py, pyo3::types::PyBytes::new(py, &data).unbind(), None)
 }

@@ -6,7 +6,6 @@
 import base64
 import binascii
 import os
-from typing import List, Tuple
 
 import pytest
 
@@ -24,7 +23,7 @@ from tests.utils import (
 
 variants = (Argon2d, Argon2i, Argon2id)
 
-vectors: List[Tuple[type, dict]] = []
+vectors: list[tuple[type, dict]] = []
 for clazz in variants:
     vectors.extend(
         (clazz, x)
@@ -39,7 +38,7 @@ for clazz in variants:
     only_if=lambda backend: not backend.argon2_supported(),
     skip_message="Supports argon2 so can't test unsupported path",
 )
-def test_unsupported_backend(backend):
+def test_unsupported_backend():
     with raises_unsupported_algorithm(None):
         Argon2id(
             salt=b"salt" * 2, length=32, iterations=1, lanes=1, memory_cost=32
@@ -51,14 +50,15 @@ def test_unsupported_backend(backend):
     skip_message="Argon2id not supported by this version of OpenSSL",
 )
 class TestArgon2:
+    @staticmethod
     @pytest.fixture(scope="class", params=variants)
-    def clazz(self, request) -> type:
+    def clazz(request) -> type:
         return request.param
 
     @pytest.mark.parametrize(
         "params", vectors, ids=lambda x: f"{x[0].__name__}-params"
     )
-    def test_derive(self, params, backend):
+    def test_derive(self, params):
         argon_clazz, params = params
         salt = binascii.unhexlify(params["salt"])
         ad = binascii.unhexlify(params["ad"]) if "ad" in params else None
@@ -85,7 +85,7 @@ class TestArgon2:
         )
         assert binascii.hexlify(variant.derive(password)) == derived_key
 
-    def test_invalid_types(self, clazz, backend):
+    def test_invalid_types(self, clazz):
         with pytest.raises(TypeError):
             clazz(
                 salt="notbytes",
@@ -130,7 +130,7 @@ class TestArgon2:
             (b"b" * 8, 32, 1, 32, 200),  # memory_cost < 8 * lanes
         ],
     )
-    def test_invalid_values(self, clazz, params, backend):
+    def test_invalid_values(self, clazz, params):
         (salt, length, iterations, lanes, memory_cost) = params
         with pytest.raises(ValueError):
             clazz(
@@ -141,7 +141,21 @@ class TestArgon2:
                 memory_cost=memory_cost,
             )
 
-    def test_already_finalized(self, clazz, backend):
+    @pytest.mark.malloc_failure
+    def test_argon2_malloc_failure(self, clazz):
+        # memory_cost is in KiB, so 2**32 - 1 KiB is ~4 TiB. This should
+        # fail to allocate on any reasonable system.
+        argon2 = clazz(
+            salt=b"salt" * 2,
+            length=32,
+            iterations=1,
+            lanes=1,
+            memory_cost=2**32 - 1,
+        )
+        with pytest.raises(MemoryError):
+            argon2.derive(b"password")
+
+    def test_already_finalized(self, clazz):
         argon2id = clazz(
             salt=b"salt" * 2, length=32, iterations=1, lanes=1, memory_cost=32
         )
@@ -149,7 +163,7 @@ class TestArgon2:
         with pytest.raises(AlreadyFinalized):
             argon2id.derive(b"password")
 
-    def test_already_finalized_verify(self, clazz, backend):
+    def test_already_finalized_verify(self, clazz):
         argon2id = clazz(
             salt=b"salt" * 2, length=32, iterations=1, lanes=1, memory_cost=32
         )
@@ -158,14 +172,14 @@ class TestArgon2:
             argon2id.verify(b"password", digest)
 
     @pytest.mark.parametrize("digest", [b"invalidkey", b"0" * 32])
-    def test_invalid_verify(self, clazz, digest, backend):
+    def test_invalid_verify(self, clazz, digest):
         argon2id = clazz(
             salt=b"salt" * 2, length=32, iterations=1, lanes=1, memory_cost=32
         )
         with pytest.raises(InvalidKey):
             argon2id.verify(b"password", digest)
 
-    def test_verify(self, clazz, backend):
+    def test_verify(self, clazz):
         argon2id = clazz(
             salt=b"salt" * 2,
             length=32,
@@ -180,7 +194,7 @@ class TestArgon2:
             salt=b"salt" * 2, length=32, iterations=1, lanes=1, memory_cost=32
         ).verify(b"password", digest)
 
-    def test_derive_into(self, clazz, backend):
+    def test_derive_into(self, clazz):
         argon2 = clazz(
             salt=b"salt" * 2, length=32, iterations=1, lanes=1, memory_cost=32
         )
@@ -197,9 +211,7 @@ class TestArgon2:
     @pytest.mark.parametrize(
         ("buflen", "outlen"), [(31, 32), (33, 32), (16, 32), (64, 32)]
     )
-    def test_derive_into_buffer_incorrect_size(
-        self, clazz, buflen, outlen, backend
-    ):
+    def test_derive_into_buffer_incorrect_size(self, clazz, buflen, outlen):
         argon2 = clazz(
             salt=b"salt" * 2,
             length=outlen,
@@ -211,7 +223,7 @@ class TestArgon2:
         with pytest.raises(ValueError, match="buffer must be"):
             argon2.derive_into(b"password", buf)
 
-    def test_derive_into_already_finalized(self, clazz, backend):
+    def test_derive_into_already_finalized(self, clazz):
         argon2 = clazz(
             salt=b"salt" * 2, length=32, iterations=1, lanes=1, memory_cost=32
         )
@@ -220,7 +232,7 @@ class TestArgon2:
         with pytest.raises(AlreadyFinalized):
             argon2.derive_into(b"password2", buf)
 
-    def test_derive_phc_encoded(self, backend):
+    def test_derive_phc_encoded(self):
         # Test that we can generate a PHC formatted string
         argon2id = Argon2id(
             salt=b"0" * 8,

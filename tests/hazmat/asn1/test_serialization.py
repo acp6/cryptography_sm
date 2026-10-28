@@ -4,19 +4,21 @@
 
 import dataclasses
 import datetime
+import enum
+import os
 import re
 import sys
+import textwrap
 import typing
+from typing import Annotated
 
 import pytest
 
-if sys.version_info < (3, 9):
-    from typing_extensions import Annotated
-else:
-    from typing import Annotated
-
 from cryptography import x509
 from cryptography.hazmat import asn1
+from cryptography.hazmat.primitives.serialization import Encoding
+
+from ...utils import load_vectors_from_file
 
 U = typing.TypeVar("U")
 
@@ -25,7 +27,7 @@ U = typing.TypeVar("U")
 # to `sequence`, except that it also adds an __eq__ method.
 # We use it for the objects under test in order to easily
 # compare them with their expected values.
-def _comparable_dataclass(cls: typing.Type[U]) -> typing.Type[U]:
+def _comparable_dataclass(cls: type[U]) -> type[U]:
     if sys.version_info >= (3, 10):
         return dataclasses.dataclass(
             repr=False,
@@ -47,7 +49,7 @@ def _comparable_dataclass(cls: typing.Type[U]) -> typing.Type[U]:
 # Checks that the encoding-decoding roundtrip results
 # in the expected values and is consistent.
 def assert_roundtrips(
-    test_cases: typing.List[typing.Tuple[U, bytes]],
+    test_cases: list[tuple[U, bytes]],
 ) -> None:
     for obj, obj_bytes in test_cases:
         encoded = asn1.encode_der(obj)
@@ -82,6 +84,12 @@ class TestInteger:
                 (-1, b"\x02\x01\xff"),
                 (-128, b"\x02\x01\x80"),
                 (-129, b"\x02\x02\xff\x7f"),
+                # Values outside the signed 64-bit range.
+                (2**63, b"\x02\x09\x00\x80\x00\x00\x00\x00\x00\x00\x00"),
+                (
+                    -(2**63) - 1,
+                    b"\x02\x09\xff\x7f\xff\xff\xff\xff\xff\xff\xff",
+                ),
             ],
         )
 
@@ -159,12 +167,12 @@ class TestObjectIdentifier:
         )
 
 
-class TestUtcTime:
+class TestUTCTime:
     def test_utc_time(self) -> None:
         assert_roundtrips(
             [
                 (
-                    asn1.UtcTime(
+                    asn1.UTCTime(
                         datetime.datetime(
                             2019,
                             12,
@@ -178,7 +186,7 @@ class TestUtcTime:
                     b"\x17\x0d191216030210Z",
                 ),
                 (
-                    asn1.UtcTime(
+                    asn1.UTCTime(
                         datetime.datetime(
                             1999,
                             1,
@@ -301,6 +309,45 @@ class TestBitString:
             asn1.decode_der(asn1.BitString, b"\x03\x02\x08\x00")
 
 
+class TestTLV:
+    def test_ok_decode_tlv(self) -> None:
+        decoded = asn1.decode_der(asn1.TLV, b"\x03\x02\x07\x40")
+        assert isinstance(decoded, asn1.TLV)
+        assert decoded.tag_bytes == b"\x03"
+        assert bytes(decoded.data) == b"\x07\x40"
+
+    def test_ok_tlv_parse_method(self) -> None:
+        decoded_tlv = asn1.decode_der(asn1.TLV, b"\x30\x03\x02\x01\x09")
+        assert isinstance(decoded_tlv, asn1.TLV)
+
+        @asn1.sequence
+        class Example:
+            foo: int
+
+        decoded_example = decoded_tlv.parse(Example)
+        assert isinstance(decoded_example, Example)
+        assert decoded_example.foo == 9
+
+    def test_ok_encode_tlv(self) -> None:
+        for original in [
+            b"\x03\x02\x07\x40",
+            b"\x02\x01\x01",
+            b"\x30\x03\x02\x01\x09",
+            b"\x05\x00",
+        ]:
+            tlv = asn1.decode_der(asn1.TLV, original)
+            assert isinstance(tlv, asn1.TLV)
+            assert asn1.encode_der(tlv) == original
+
+    def test_ok_encode_tlv_roundtrip_from_value(self) -> None:
+        # Parse an arbitrary element with the TLV specifier, then
+        # serialize just that element back to its original DER.
+        original = asn1.encode_der(1)
+        tlv = asn1.decode_der(asn1.TLV, original)
+        assert isinstance(tlv, asn1.TLV)
+        assert asn1.encode_der(tlv) == original
+
+
 class TestNull:
     def test_ok_null(self) -> None:
         assert_roundtrips([(asn1.Null(), b"\x05\x00")])
@@ -363,7 +410,7 @@ class TestSequence:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: typing.List[int]
+            a: list[int]
 
         assert_roundtrips(
             [
@@ -384,13 +431,53 @@ class TestSequence:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: typing.List[MyType]
+            a: list[MyType]
 
         assert_roundtrips(
             [
                 (
                     Example(a=[MyType(a=1, b=True), MyType(a=2, b=False)]),
                     b"\x30\x12\x30\x10\x30\x06\x02\x01\x01\x01\x01\xff\x30\x06\x02\x01\x02\x01\x01\x00",
+                )
+            ]
+        )
+
+    def test_ok_setof_simple_type(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: asn1.SetOf[int]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(a=asn1.SetOf([1, 2, 3, 4])),
+                    b"\x30\x0e\x31\x0c\x02\x01\x01\x02\x01\x02\x02\x01\x03\x02\x01\x04",
+                )
+            ]
+        )
+
+    def test_ok_setof_user_defined_type(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class MyType:
+            a: int
+            b: bool
+
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: asn1.SetOf[MyType]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(
+                        a=asn1.SetOf(
+                            [MyType(a=1, b=True), MyType(a=2, b=False)]
+                        )
+                    ),
+                    b"\x30\x12\x31\x10\x30\x06\x02\x01\x01\x01\x01\xff\x30\x06\x02\x01\x02\x01\x01\x00",
                 )
             ]
         )
@@ -402,7 +489,7 @@ class TestSequence:
             a: typing.Union[bool, None]
             b: int
             c: bytes
-            d: typing.Union[None, str]
+            d: typing.Union[str, None]
 
         assert_roundtrips(
             [
@@ -431,7 +518,7 @@ class TestSequence:
             a: typing.Union[typing.Union[bool, None], None]
             b: int
             c: bytes
-            d: typing.Union[None, typing.Union[None, str]]
+            d: typing.Union[typing.Union[str, None], None]
 
         assert_roundtrips(
             [
@@ -459,16 +546,23 @@ class TestSequence:
         class MyField:
             a: int
 
+        @asn1.set
+        @_comparable_dataclass
+        class MySetField:
+            a: int
+
         @asn1.sequence
         @_comparable_dataclass
         class Example:
             a: typing.Union[MyField, None]
+            a2: typing.Union[MySetField, None]
             b: typing.Union[int, None]
             c: typing.Union[bytes, None]
             d: typing.Union[asn1.PrintableString, None]
-            e: typing.Union[asn1.UtcTime, None]
+            e: typing.Union[asn1.UTCTime, None]
             f: typing.Union[asn1.GeneralizedTime, None]
-            g: typing.Union[typing.List[int], None]
+            g: typing.Union[list[int], None]
+            g2: typing.Union[asn1.SetOf[int], None]
             h: typing.Union[asn1.BitString, None]
             i: typing.Union[asn1.IA5String, None]
             j: typing.Union[x509.ObjectIdentifier, None]
@@ -483,12 +577,14 @@ class TestSequence:
                 (
                     Example(
                         a=None,
+                        a2=None,
                         b=None,
                         c=None,
                         d=None,
                         e=None,
                         f=None,
                         g=None,
+                        g2=None,
                         h=None,
                         i=None,
                         j=None,
@@ -502,6 +598,11 @@ class TestSequence:
         )
 
     def test_ok_sequence_all_types_default(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class MyField:
+            a: int
+
         default_time = datetime.datetime(
             2019,
             12,
@@ -513,6 +614,11 @@ class TestSequence:
         )
         default_oid = x509.ObjectIdentifier("1.3.6.1.4.1.343")
 
+        @asn1.set
+        @_comparable_dataclass
+        class MySetField:
+            a: int
+
         @asn1.sequence
         @_comparable_dataclass
         class Example:
@@ -522,14 +628,14 @@ class TestSequence:
                 asn1.PrintableString, asn1.Default(asn1.PrintableString("a"))
             ]
             d: Annotated[
-                asn1.UtcTime,
-                asn1.Default(asn1.UtcTime(default_time)),
+                asn1.UTCTime,
+                asn1.Default(asn1.UTCTime(default_time)),
             ]
             e: Annotated[
                 asn1.GeneralizedTime,
                 asn1.Default(asn1.GeneralizedTime(default_time)),
             ]
-            f: Annotated[typing.List[int], asn1.Default([1])]
+            f: Annotated[list[int], asn1.Default([1])]
             g: Annotated[
                 asn1.BitString,
                 asn1.Default(
@@ -548,6 +654,14 @@ class TestSequence:
                 asn1.Null,
                 asn1.Default(asn1.Null()),
             ]
+            k2: Annotated[
+                MyField,
+                asn1.Default(MyField(a=9)),
+            ]
+            k3: Annotated[
+                MySetField,
+                asn1.Default(MySetField(a=9)),
+            ]
             z: Annotated[str, asn1.Default("a"), asn1.Implicit(0)]
             only_field_present: Annotated[
                 str, asn1.Default("a"), asn1.Implicit(1)
@@ -560,7 +674,7 @@ class TestSequence:
                         a=3,
                         b=b"\x00",
                         c=asn1.PrintableString("a"),
-                        d=asn1.UtcTime(default_time),
+                        d=asn1.UTCTime(default_time),
                         e=asn1.GeneralizedTime(default_time),
                         f=[1],
                         g=asn1.BitString(data=b"", padding_bits=0),
@@ -568,6 +682,8 @@ class TestSequence:
                         i=default_oid,
                         j=3,
                         k=asn1.Null(),
+                        k2=MyField(a=9),
+                        k3=MySetField(a=9),
                         z="a",
                         only_field_present="b",
                     ),
@@ -747,7 +863,7 @@ class TestSequence:
         with pytest.raises(
             ValueError,
         ):
-            asn1.encode_der(Example(foo=3))  # type: ignore[arg-type]
+            asn1.encode_der(Example(foo=typing.cast(typing.Any, 3)))
 
     def test_sequence_with_explicit_choice(self) -> None:
         @asn1.sequence
@@ -929,13 +1045,220 @@ class TestSequence:
             ]
         )
 
+    def test_sequence_with_tlv_with_explicit_annotation(
+        self,
+    ) -> None:
+        @asn1.sequence
+        class Example:
+            foo: Annotated[asn1.TLV, asn1.Explicit(0)]
+            bar: Annotated[asn1.TLV, asn1.Explicit(1)]
+
+        encoded = b"\x30\x0a\xa0\x03\x02\x01\x08\xa1\x03\x02\x01\x09"
+        decoded = asn1.decode_der(Example, encoded)
+
+        assert isinstance(decoded.foo, asn1.TLV)
+        assert decoded.foo.tag_bytes == b"\x02"
+        assert bytes(decoded.foo.data) == b"\x08"
+
+        assert isinstance(decoded.bar, asn1.TLV)
+        assert decoded.bar.tag_bytes == b"\x02"
+        assert bytes(decoded.bar.data) == b"\x09"
+
+        # Re-encoding the EXPLICIT-tagged TLV fields produces the
+        # original DER.
+        assert asn1.encode_der(decoded) == encoded
+
+    def test_fail_sequence_with_tlv_with_explicit_annotation(
+        self,
+    ) -> None:
+        @asn1.sequence
+        class Example:
+            foo: Annotated[asn1.TLV, asn1.Explicit(0)]
+            # explicit tag does not match data
+            bar: Annotated[asn1.TLV, asn1.Explicit(3)]
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape("error parsing asn1 value"),
+        ):
+            asn1.decode_der(
+                Example, b"\x30\x0a\xa0\x03\x02\x01\x08\xa1\x03\x02\x01\x09"
+            )
+
+
+class TestSet:
+    def test_ok_set_single_field(self) -> None:
+        @asn1.set
+        @_comparable_dataclass
+        class Example:
+            foo: int
+
+        assert_roundtrips([(Example(foo=9), b"\x31\x03\x02\x01\x09")])
+
+    def test_ok_set_multiple_fields(self) -> None:
+        @asn1.set
+        @_comparable_dataclass
+        class Example:
+            foo: int
+            bar: int
+
+        assert_roundtrips(
+            [(Example(foo=6, bar=9), b"\x31\x06\x02\x01\x06\x02\x01\x09")]
+        )
+
+    def test_fail_set_multiple_fields_wrong_order(self) -> None:
+        @asn1.set
+        @_comparable_dataclass
+        class Example:
+            foo: int
+            bar: int
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape(
+                "invalid SET ordering while performing ASN.1 serialization"
+            ),
+        ):
+            assert_roundtrips(
+                [(Example(foo=9, bar=6), b"\x31\x06\x02\x01\x06\x02\x01\x09")]
+            )
+
+    def test_ok_nested_set(self) -> None:
+        @asn1.set
+        @_comparable_dataclass
+        class Child:
+            foo: int
+
+        @asn1.set
+        @_comparable_dataclass
+        class Parent:
+            foo: Child
+
+        assert_roundtrips(
+            [(Parent(foo=Child(foo=9)), b"\x31\x05\x31\x03\x02\x01\x09")]
+        )
+
+    def test_ok_set_multiple_types(self) -> None:
+        @asn1.set
+        @_comparable_dataclass
+        class Example:
+            a: bool
+            b: int
+            c: bytes
+            d: str
+
+        assert_roundtrips(
+            [
+                (
+                    Example(a=True, b=9, c=b"c", d="d"),
+                    b"\x31\x0c\x01\x01\xff\x02\x01\x09\x04\x01c\x0c\x01d",
+                )
+            ]
+        )
+
+
+class TestSequenceOf:
+    # DER data can be decoded into a `list` by passing `list[T]` to
+    # `decode_der`, the same way `list[T]` is used for sequence/set
+    # fields.
+    def test_ok_decode_list(self) -> None:
+        assert asn1.decode_der(
+            list[int], b"\x30\x06\x02\x01\x01\x02\x01\x02"
+        ) == [1, 2]
+        assert asn1.decode_der(list[int], b"\x30\x00") == []
+        assert asn1.decode_der(
+            list[list[int]], b"\x30\x08\x30\x06\x02\x01\x01\x02\x01\x02"
+        ) == [[1, 2]]
+
+    def test_fail_decode_bare_list(self) -> None:
+        with pytest.raises(
+            TypeError, match="cannot handle type: <class 'list'>"
+        ):
+            asn1.decode_der(list, b"\x30\x00")
+
+    def test_fail_decode_list_of_unsupported_type(self) -> None:
+        with pytest.raises(
+            TypeError, match="cannot handle type: <class 'float'>"
+        ):
+            asn1.decode_der(list[float], b"\x30\x00")
+
+    def test_fail_decode_list_with_wrong_tag(self) -> None:
+        with pytest.raises(ValueError):
+            asn1.decode_der(list[int], b"\x31\x00")
+
+    def test_fail_encode_list(self) -> None:
+        # Encoding a top-level `list` is not supported: `encode_der`
+        # has no element type to encode it with.
+        with pytest.raises(
+            TypeError, match="cannot handle type: <class 'list'>"
+        ):
+            asn1.encode_der([1, 2])
+
+
+class TestSetOf:
+    # A top-level `SetOf` can be passed directly to `encode_der` (the
+    # element type is inferred from the first element), and DER data can
+    # be decoded into a `SetOf` by passing `SetOf[T]` to `decode_der`.
+    def test_ok_encode_setof(self) -> None:
+        assert (
+            asn1.encode_der(asn1.SetOf([3, 1, 2]))
+            == b"\x31\x09\x02\x01\x01\x02\x01\x02\x02\x01\x03"
+        )
+
+    def test_ok_encode_empty_setof(self) -> None:
+        assert asn1.encode_der(asn1.SetOf([])) == b"\x31\x00"
+
+    def test_ok_decode_setof(self) -> None:
+        assert asn1.decode_der(
+            asn1.SetOf[int], b"\x31\x09\x02\x01\x01\x02\x01\x02\x02\x01\x03"
+        ) == asn1.SetOf([1, 2, 3])
+        assert asn1.decode_der(asn1.SetOf[int], b"\x31\x00") == asn1.SetOf([])
+
+    def test_setof_default(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            values: Annotated[
+                asn1.SetOf[int], asn1.Default(asn1.SetOf([3, 1, 2]))
+            ]
+            data: bytes
+
+        # A value equal to the DEFAULT is omitted, whatever order its
+        # elements are listed in.
+        assert_roundtrips(
+            [
+                (
+                    Example(values=asn1.SetOf([1, 2, 3]), data=b"x"),
+                    b"\x30\x03\x04\x01\x78",
+                ),
+                (
+                    Example(values=asn1.SetOf([3, 1, 2]), data=b"x"),
+                    b"\x30\x03\x04\x01\x78",
+                ),
+                (
+                    Example(values=asn1.SetOf([1, 2]), data=b"x"),
+                    b"\x30\x0b\x31\x06\x02\x01\x01\x02\x01\x02\x04\x01\x78",
+                ),
+            ]
+        )
+
+        # Explicitly encoding the DEFAULT is not valid DER.
+        with pytest.raises(
+            ValueError, match="DEFAULT value was explicitly encoded"
+        ):
+            asn1.decode_der(
+                Example,
+                b"\x30\x0e\x31\x09\x02\x01\x01\x02\x01\x02\x02\x01\x03"
+                b"\x04\x01\x78",
+            )
+
 
 class TestSize:
     def test_ok_sequenceof_size_restriction(self) -> None:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: Annotated[typing.List[int], asn1.Size(min=1, max=4)]
+            a: Annotated[list[int], asn1.Size(min=1, max=4)]
 
         assert_roundtrips(
             [
@@ -950,7 +1273,7 @@ class TestSize:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: Annotated[typing.List[int], asn1.Size(min=1, max=None)]
+            a: Annotated[list[int], asn1.Size(min=1, max=None)]
 
         assert_roundtrips(
             [
@@ -965,7 +1288,7 @@ class TestSize:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: Annotated[typing.List[int], asn1.Size.exact(4)]
+            a: Annotated[list[int], asn1.Size.exact(4)]
 
         assert_roundtrips(
             [
@@ -980,7 +1303,7 @@ class TestSize:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: Annotated[typing.List[int], asn1.Size(min=1, max=2)]
+            a: Annotated[list[int], asn1.Size(min=1, max=2)]
 
         with pytest.raises(
             ValueError,
@@ -1000,7 +1323,7 @@ class TestSize:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: Annotated[typing.List[int], asn1.Size(min=5, max=6)]
+            a: Annotated[list[int], asn1.Size(min=5, max=6)]
 
         with pytest.raises(
             ValueError,
@@ -1020,7 +1343,7 @@ class TestSize:
         @asn1.sequence
         @_comparable_dataclass
         class Example:
-            a: Annotated[typing.List[int], asn1.Size.exact(5)]
+            a: Annotated[list[int], asn1.Size.exact(5)]
 
         with pytest.raises(
             ValueError,
@@ -1035,6 +1358,111 @@ class TestSize:
             ValueError,
         ):
             asn1.encode_der(Example(a=[1, 2, 3, 4]))
+
+    def test_ok_setof_size_restriction(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[asn1.SetOf[int], asn1.Size(min=1, max=4)]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(a=asn1.SetOf([1, 2, 3, 4])),
+                    b"\x30\x0e\x31\x0c\x02\x01\x01\x02\x01\x02\x02\x01\x03\x02\x01\x04",
+                )
+            ]
+        )
+
+    def test_ok_setof_size_restriction_no_max(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[asn1.SetOf[int], asn1.Size(min=1, max=None)]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(a=asn1.SetOf([1, 2, 3, 4])),
+                    b"\x30\x0e\x31\x0c\x02\x01\x01\x02\x01\x02\x02\x01\x03\x02\x01\x04",
+                )
+            ]
+        )
+
+    def test_ok_setof_size_restriction_exact(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[asn1.SetOf[int], asn1.Size.exact(4)]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(a=asn1.SetOf([1, 2, 3, 4])),
+                    b"\x30\x0e\x31\x0c\x02\x01\x01\x02\x01\x02\x02\x01\x03\x02\x01\x04",
+                )
+            ]
+        )
+
+    def test_fail_setof_size_too_big(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[asn1.SetOf[int], asn1.Size(min=1, max=2)]
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape("SET OF has size 4, expected size in [1, 2]"),
+        ):
+            asn1.decode_der(
+                Example,
+                b"\x30\x0e\x31\x0c\x02\x01\x01\x02\x01\x02\x02\x01\x03\x02\x01\x04",
+            )
+
+        with pytest.raises(
+            ValueError,
+        ):
+            asn1.encode_der(Example(a=asn1.SetOf([1, 2, 3, 4])))
+
+    def test_fail_setof_size_too_small(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[asn1.SetOf[int], asn1.Size(min=5, max=6)]
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape("SET OF has size 4, expected size in [5, 6]"),
+        ):
+            asn1.decode_der(
+                Example,
+                b"\x30\x0e\x31\x0c\x02\x01\x01\x02\x01\x02\x02\x01\x03\x02\x01\x04",
+            )
+
+        with pytest.raises(
+            ValueError,
+        ):
+            asn1.encode_der(Example(a=asn1.SetOf([1, 2, 3, 4])))
+
+    def test_fail_setof_size_not_exact(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[asn1.SetOf[int], asn1.Size.exact(5)]
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape("SET OF has size 4, expected size in [5, 5]"),
+        ):
+            asn1.decode_der(
+                Example,
+                b"\x30\x0e\x31\x0c\x02\x01\x01\x02\x01\x02\x02\x01\x03\x02\x01\x04",
+            )
+
+        with pytest.raises(
+            ValueError,
+        ):
+            asn1.encode_der(Example(a=asn1.SetOf([1, 2, 3, 4])))
 
     def test_ok_bytes_size_restriction(self) -> None:
         @asn1.sequence
@@ -1161,6 +1589,40 @@ class TestSize:
                 )
             ]
         )
+
+    def test_ok_string_size_counts_characters(self) -> None:
+        # "é€" is two characters but five UTF-8 bytes, so a SIZE constraint
+        # measured in characters must accept it under max=2.
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[str, asn1.Size(min=1, max=2)]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(a="é€"),
+                    b"\x30\x07\x0c\x05\xc3\xa9\xe2\x82\xac",
+                )
+            ]
+        )
+
+    def test_fail_string_size_counts_characters(self) -> None:
+        # "é€" is two characters; SIZE(min=3) must reject it even though it
+        # is five UTF-8 bytes.
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            a: Annotated[str, asn1.Size(min=3, max=10)]
+
+        with pytest.raises(
+            ValueError,
+            match=re.escape("UTF8String has size 2, expected size in [3, 10]"),
+        ):
+            asn1.decode_der(
+                Example,
+                b"\x30\x07\x0c\x05\xc3\xa9\xe2\x82\xac",
+            )
 
     def test_ok_string_size_restriction_no_max(self) -> None:
         @asn1.sequence
@@ -1577,4 +2039,712 @@ class TestSize:
         ):
             asn1.encode_der(
                 Example(a=asn1.BitString(data=b"\xf0", padding_bits=4))
+            )
+
+
+def _der_length(n: int) -> bytes:
+    if n < 0x80:
+        return bytes([n])
+    length_bytes = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([0x80 | len(length_bytes)]) + length_bytes
+
+
+class TestX509Types:
+    @pytest.fixture
+    def cert(self) -> x509.Certificate:
+        return load_vectors_from_file(
+            filename=os.path.join("x509", "custom", "post2000utctime.pem"),
+            loader=lambda f: x509.load_pem_x509_certificate(f.read()),
+            mode="rb",
+        )
+
+    @pytest.fixture
+    def csr(self) -> x509.CertificateSigningRequest:
+        return load_vectors_from_file(
+            filename=os.path.join("x509", "requests", "rsa_sha1.pem"),
+            loader=lambda f: x509.load_pem_x509_csr(f.read()),
+            mode="rb",
+        )
+
+    @pytest.fixture
+    def crl(self) -> x509.CertificateRevocationList:
+        return load_vectors_from_file(
+            filename=os.path.join("x509", "custom", "crl_all_reasons.pem"),
+            loader=lambda f: x509.load_pem_x509_crl(f.read()),
+            mode="rb",
+        )
+
+    def test_certificate(self, cert: x509.Certificate) -> None:
+        assert_roundtrips([(cert, cert.public_bytes(Encoding.DER))])
+
+    def test_csr(self, csr: x509.CertificateSigningRequest) -> None:
+        assert_roundtrips([(csr, csr.public_bytes(Encoding.DER))])
+
+    def test_crl(self, crl: x509.CertificateRevocationList) -> None:
+        assert_roundtrips([(crl, crl.public_bytes(Encoding.DER))])
+
+    def test_fields(
+        self,
+        cert: x509.Certificate,
+        csr: x509.CertificateSigningRequest,
+        crl: x509.CertificateRevocationList,
+    ) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            cert: x509.Certificate
+            csr: x509.CertificateSigningRequest
+            crl: x509.CertificateRevocationList
+
+        inner = (
+            cert.public_bytes(Encoding.DER)
+            + csr.public_bytes(Encoding.DER)
+            + crl.public_bytes(Encoding.DER)
+        )
+        expected = b"\x30" + _der_length(len(inner)) + inner
+        assert_roundtrips([(Example(cert=cert, csr=csr, crl=crl), expected)])
+
+    def test_certificate_explicit(self, cert: x509.Certificate) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            cert: Annotated[x509.Certificate, asn1.Explicit(0)]
+
+        cert_der = cert.public_bytes(Encoding.DER)
+        inner = b"\xa0" + _der_length(len(cert_der)) + cert_der
+        expected = b"\x30" + _der_length(len(inner)) + inner
+        assert_roundtrips([(Example(cert=cert), expected)])
+
+    def test_fail_certificate_implicit(self) -> None:
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "IMPLICIT annotations are not supported for X.509 types"
+            ),
+        ):
+
+            @asn1.sequence
+            class Example:
+                cert: Annotated[x509.Certificate, asn1.Implicit(0)]
+
+    def test_fail_optional_certificate_implicit(self) -> None:
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "IMPLICIT annotations are not supported for X.509 types"
+            ),
+        ):
+
+            @asn1.sequence
+            class Example:
+                cert: Annotated[
+                    typing.Union[x509.Certificate, None], asn1.Implicit(0)
+                ]
+
+    def test_optional_certificate(self, cert: x509.Certificate) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            cert: typing.Union[x509.Certificate, None]
+
+        cert_der = cert.public_bytes(Encoding.DER)
+        assert_roundtrips(
+            [
+                (
+                    Example(cert=cert),
+                    b"\x30" + _der_length(len(cert_der)) + cert_der,
+                ),
+                (Example(cert=None), b"\x30\x00"),
+            ]
+        )
+
+    def test_certificate_choice(self, cert: x509.Certificate) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            field: typing.Union[x509.Certificate, int]
+
+        cert_der = cert.public_bytes(Encoding.DER)
+        assert_roundtrips(
+            [
+                (
+                    Example(field=cert),
+                    b"\x30" + _der_length(len(cert_der)) + cert_der,
+                ),
+                (
+                    Example(field=9),
+                    b"\x30" + _der_length(3) + b"\x02\x01\x09",
+                ),
+            ]
+        )
+
+    def test_decode_invalid(self) -> None:
+        # Not even a valid TLV
+        with pytest.raises(ValueError):
+            asn1.decode_der(x509.Certificate, b"")
+
+        # Wrong tag (INTEGER instead of SEQUENCE)
+        with pytest.raises(ValueError):
+            asn1.decode_der(x509.Certificate, b"\x02\x01\x00")
+
+        # Valid SEQUENCEs, but not valid certificates/CSRs/CRLs
+        with pytest.raises(ValueError):
+            asn1.decode_der(x509.Certificate, b"\x30\x03\x02\x01\x00")
+        with pytest.raises(ValueError):
+            asn1.decode_der(
+                x509.CertificateSigningRequest, b"\x30\x03\x02\x01\x00"
+            )
+        with pytest.raises(ValueError):
+            asn1.decode_der(
+                x509.CertificateRevocationList, b"\x30\x03\x02\x01\x00"
+            )
+
+    def test_encode_wrong_type(self) -> None:
+        @asn1.sequence
+        class Example:
+            cert: x509.Certificate
+
+        with pytest.raises(TypeError):
+            asn1.encode_der(Example(cert=typing.cast(typing.Any, 9)))
+
+
+class TestName:
+    @pytest.fixture
+    def name(self) -> x509.Name:
+        return x509.Name.from_rfc4514_string("CN=foo,O=bar")
+
+    def test_name(self, name: x509.Name) -> None:
+        empty = x509.Name([])
+        name_der = name.public_bytes()
+        assert_roundtrips(
+            [
+                # Top-level, both populated and empty.
+                (name, name_der),
+                (empty, empty.public_bytes()),
+            ]
+        )
+
+    def test_fields(self, name: x509.Name) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            name: x509.Name
+
+        inner = name.public_bytes()
+        expected = b"\x30" + _der_length(len(inner)) + inner
+        assert_roundtrips([(Example(name=name), expected)])
+
+    def test_name_implicit(self, name: x509.Name) -> None:
+        # Unlike Certificate/CSR/CRL, Name is encoded and decoded through the
+        # asn1 machinery directly, so it supports IMPLICIT annotations.
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            name: Annotated[x509.Name, asn1.Implicit(0)]
+
+        name_der = name.public_bytes()
+        # IMPLICIT tagging replaces the outer SEQUENCE tag (0x30) with the
+        # constructed context-specific tag [0] (0xa0).
+        inner = b"\xa0" + name_der[1:]
+        expected = b"\x30" + _der_length(len(inner)) + inner
+        assert_roundtrips([(Example(name=name), expected)])
+
+    def test_decode_invalid(self) -> None:
+        # Not even a valid TLV
+        with pytest.raises(ValueError):
+            asn1.decode_der(x509.Name, b"")
+
+        # Wrong tag (INTEGER instead of SEQUENCE)
+        with pytest.raises(ValueError):
+            asn1.decode_der(x509.Name, b"\x02\x01\x00")
+
+    def test_encode_wrong_type(self) -> None:
+        @asn1.sequence
+        class Example:
+            name: x509.Name
+
+        with pytest.raises(TypeError):
+            asn1.encode_der(Example(name=typing.cast(typing.Any, 9)))
+
+
+@asn1.value_set(x509.ObjectIdentifier)
+class Algorithm(enum.Enum):
+    A = x509.ObjectIdentifier("1.2.3.4")
+    B = x509.ObjectIdentifier("1.2.3.5")
+
+
+class TestValueSet:
+    def test_ok_oid_value_set(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: Algorithm
+
+        assert_roundtrips(
+            [
+                (
+                    Example(algorithm=Algorithm.A),
+                    b"\x30\x05\x06\x03\x2a\x03\x04",
+                ),
+                (
+                    Example(algorithm=Algorithm.B),
+                    b"\x30\x05\x06\x03\x2a\x03\x05",
+                ),
+            ]
+        )
+
+        # Decoding returns the enum member itself
+        decoded = asn1.decode_der(Example, b"\x30\x05\x06\x03\x2a\x03\x04")
+        assert decoded.algorithm is Algorithm.A
+
+    def test_ok_int_value_set(self) -> None:
+        @asn1.value_set(int)
+        class Version(enum.Enum):
+            V1 = 1
+            V2 = 2
+
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            version: Version
+
+        assert_roundtrips(
+            [
+                (Example(version=Version.V1), b"\x30\x03\x02\x01\x01"),
+                (Example(version=Version.V2), b"\x30\x03\x02\x01\x02"),
+            ]
+        )
+
+    def test_ok_top_level_value_set(self) -> None:
+        assert_roundtrips(
+            [
+                (Algorithm.A, b"\x06\x03\x2a\x03\x04"),
+                (Algorithm.B, b"\x06\x03\x2a\x03\x05"),
+            ]
+        )
+
+    def test_ok_value_set_implicit(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: Annotated[Algorithm, asn1.Implicit(0)]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(algorithm=Algorithm.A),
+                    b"\x30\x05\x80\x03\x2a\x03\x04",
+                ),
+            ]
+        )
+
+    def test_ok_value_set_explicit(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: Annotated[Algorithm, asn1.Explicit(0)]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(algorithm=Algorithm.A),
+                    b"\x30\x07\xa0\x05\x06\x03\x2a\x03\x04",
+                ),
+            ]
+        )
+
+    def test_ok_optional_value_set(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: typing.Union[Algorithm, None]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(algorithm=Algorithm.A),
+                    b"\x30\x05\x06\x03\x2a\x03\x04",
+                ),
+                (Example(algorithm=None), b"\x30\x00"),
+            ]
+        )
+
+    def test_ok_value_set_default(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: Annotated[Algorithm, asn1.Default(Algorithm.A)]
+
+        assert_roundtrips(
+            [
+                (Example(algorithm=Algorithm.A), b"\x30\x00"),
+                (
+                    Example(algorithm=Algorithm.B),
+                    b"\x30\x05\x06\x03\x2a\x03\x05",
+                ),
+            ]
+        )
+
+        with pytest.raises(
+            ValueError, match="DEFAULT value was explicitly encoded"
+        ):
+            asn1.decode_der(Example, b"\x30\x05\x06\x03\x2a\x03\x04")
+
+    def test_ok_value_set_in_choice(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            field: typing.Union[Algorithm, int]
+
+        assert_roundtrips(
+            [
+                (
+                    Example(field=Algorithm.A),
+                    b"\x30\x05\x06\x03\x2a\x03\x04",
+                ),
+                (Example(field=9), b"\x30\x03\x02\x01\x09"),
+            ]
+        )
+
+    def test_fail_decode_non_member_value(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: Algorithm
+
+        with pytest.raises(
+            ValueError, match="is not a valid value for Algorithm"
+        ):
+            asn1.decode_der(Example, b"\x30\x05\x06\x03\x2a\x03\x06")
+
+    def test_fail_decode_wrong_type(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: Algorithm
+
+        with pytest.raises(ValueError):
+            asn1.decode_der(Example, b"\x30\x03\x02\x01\x01")
+
+    def test_fail_encode_non_member(self) -> None:
+        @asn1.sequence
+        @_comparable_dataclass
+        class Example:
+            algorithm: Algorithm
+
+        with pytest.raises(
+            TypeError,
+            match="value set field must be an instance of Algorithm, "
+            "got: ObjectIdentifier",
+        ):
+            asn1.encode_der(
+                Example(
+                    algorithm=typing.cast(
+                        typing.Any, x509.ObjectIdentifier("1.2.3.4")
+                    )
+                )
+            )
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 12),
+    reason="PEP 695 type aliases require Python 3.12+",
+)
+class TestTypeAliases:
+    # The PEP 695 `type X = ...` syntax is not available in all
+    # supported Python versions, so the structures under test are
+    # defined in strings and compiled at test time with `exec()`.
+    def _exec(self, src: str) -> dict[str, typing.Any]:
+        namespace: dict[str, typing.Any] = {
+            "asn1": asn1,
+            "typing": typing,
+            "Annotated": Annotated,
+            "_comparable_dataclass": _comparable_dataclass,
+        }
+        exec(textwrap.dedent(src), namespace)
+        return namespace
+
+    def test_alias_of_simple_type(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: MyInt
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips([(cls(foo=9), b"\x30\x03\x02\x01\x09")])
+
+    def test_alias_of_alias(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+            type MyOtherInt = MyInt
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: MyOtherInt
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips([(cls(foo=9), b"\x30\x03\x02\x01\x09")])
+
+    def test_alias_of_choice(self) -> None:
+        namespace = self._exec(
+            """
+            type Time = asn1.UTCTime | asn1.GeneralizedTime
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Validity:
+                not_before: Time
+                not_after: Time
+            """
+        )
+        cls = namespace["Validity"]
+
+        utc_time = asn1.UTCTime(
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        )
+        generalized_time = asn1.GeneralizedTime(
+            datetime.datetime(2050, 6, 15, tzinfo=datetime.timezone.utc)
+        )
+        assert_roundtrips(
+            [
+                (
+                    cls(not_before=utc_time, not_after=utc_time),
+                    b"\x30\x1e\x17\x0d250101000000Z\x17\x0d250101000000Z",
+                ),
+                (
+                    cls(not_before=utc_time, not_after=generalized_time),
+                    b"\x30\x20\x17\x0d250101000000Z\x18\x0f20500615000000Z",
+                ),
+            ]
+        )
+
+    def test_alias_inside_annotated(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: Annotated[MyInt, asn1.Implicit(0)]
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips([(cls(foo=9), b"\x30\x03\x80\x01\x09")])
+
+    def test_alias_of_annotated(self) -> None:
+        namespace = self._exec(
+            """
+            type ImplicitInt = Annotated[int, asn1.Implicit(0)]
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: ImplicitInt
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips([(cls(foo=9), b"\x30\x03\x80\x01\x09")])
+
+    def test_optional_alias(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: MyInt | None
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips(
+            [
+                (cls(foo=9), b"\x30\x03\x02\x01\x09"),
+                (cls(foo=None), b"\x30\x00"),
+            ]
+        )
+
+    def test_optional_alias_of_choice(self) -> None:
+        namespace = self._exec(
+            """
+            type Time = asn1.UTCTime | asn1.GeneralizedTime
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: Time | None
+            """
+        )
+        cls = namespace["Example"]
+
+        utc_time = asn1.UTCTime(
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        )
+        assert_roundtrips(
+            [
+                (
+                    cls(foo=utc_time),
+                    b"\x30\x0f\x17\x0d250101000000Z",
+                ),
+                (cls(foo=None), b"\x30\x00"),
+            ]
+        )
+
+    def test_alias_as_choice_member(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: MyInt | str
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips(
+            [
+                (cls(foo=9), b"\x30\x03\x02\x01\x09"),
+                (cls(foo="a"), b"\x30\x03\x0c\x01a"),
+            ]
+        )
+
+    def test_alias_of_union_as_choice_member(self) -> None:
+        # A union alias inside a union is flattened into a single
+        # CHOICE, the same as if the alias had been written inline.
+        namespace = self._exec(
+            """
+            type Time = asn1.UTCTime | asn1.GeneralizedTime
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: Time | int
+            """
+        )
+        cls = namespace["Example"]
+
+        utc_time = asn1.UTCTime(
+            datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+        )
+        assert_roundtrips(
+            [
+                (cls(foo=9), b"\x30\x03\x02\x01\x09"),
+                (
+                    cls(foo=utc_time),
+                    b"\x30\x0f\x17\x0d250101000000Z",
+                ),
+            ]
+        )
+
+    def test_alias_in_sequence_of(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: list[MyInt]
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips(
+            [
+                (
+                    cls(foo=[1, 2]),
+                    b"\x30\x08\x30\x06\x02\x01\x01\x02\x01\x02",
+                ),
+            ]
+        )
+
+    def test_alias_in_set_of(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: asn1.SetOf[MyInt]
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips(
+            [
+                (
+                    cls(foo=asn1.SetOf([1, 2])),
+                    b"\x30\x08\x31\x06\x02\x01\x01\x02\x01\x02",
+                ),
+            ]
+        )
+
+    def test_alias_in_variant(self) -> None:
+        namespace = self._exec(
+            """
+            type MyInt = int
+
+            @asn1.sequence
+            @_comparable_dataclass
+            class Example:
+                foo: (
+                    Annotated[
+                        asn1.Variant[MyInt, typing.Literal["IntA"]],
+                        asn1.Implicit(0),
+                    ]
+                    | Annotated[
+                        asn1.Variant[MyInt, typing.Literal["IntB"]],
+                        asn1.Implicit(1),
+                    ]
+                )
+            """
+        )
+        cls = namespace["Example"]
+
+        assert_roundtrips(
+            [
+                (
+                    cls(foo=asn1.Variant(9, "IntA")),
+                    b"\x30\x03\x80\x01\x09",
+                ),
+                (
+                    cls(foo=asn1.Variant(9, "IntB")),
+                    b"\x30\x03\x81\x01\x09",
+                ),
+            ]
+        )
+
+    def test_fail_optional_alias_of_tlv(self) -> None:
+        # Aliases are resolved before field type validation runs.
+        with pytest.raises(
+            TypeError,
+            match=re.escape(
+                "optional TLV types (`TLV | None`) are not currently supported"
+            ),
+        ):
+            self._exec(
+                """
+                type MyTLV = asn1.TLV
+
+                @asn1.sequence
+                class Example:
+                    foo: MyTLV | None
+                """
             )

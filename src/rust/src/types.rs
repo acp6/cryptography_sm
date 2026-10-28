@@ -37,6 +37,7 @@ pub static DATETIME_TIMEZONE_UTC: LazyPyImport =
     LazyPyImport::new("datetime", &["timezone", "utc"]);
 pub static IPADDRESS_IPADDRESS: LazyPyImport = LazyPyImport::new("ipaddress", &["ip_address"]);
 pub static IPADDRESS_IPNETWORK: LazyPyImport = LazyPyImport::new("ipaddress", &["ip_network"]);
+pub static TIME: LazyPyImport = LazyPyImport::new("time", &[]);
 
 pub static DEPRECATED_IN_36: LazyPyImport =
     LazyPyImport::new("cryptography.utils", &["DeprecatedIn36"]);
@@ -46,95 +47,15 @@ pub static DEPRECATED_IN_42: LazyPyImport =
     LazyPyImport::new("cryptography.utils", &["DeprecatedIn42"]);
 pub static DEPRECATED_IN_43: LazyPyImport =
     LazyPyImport::new("cryptography.utils", &["DeprecatedIn43"]);
+pub static DEPRECATED_IN_50: LazyPyImport =
+    LazyPyImport::new("cryptography.utils", &["DeprecatedIn50"]);
+pub static DEPRECATED_IN_51: LazyPyImport =
+    LazyPyImport::new("cryptography.utils", &["DeprecatedIn51"]);
 
-pub static ENCODING: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["Encoding"],
+pub static KEY_SERIALIZATION_ENCRYPTION_BUILDER: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives._serialization",
+    &["KeySerializationEncryptionBuilder"],
 );
-pub static ENCODING_DER: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["Encoding", "DER"],
-);
-pub static ENCODING_OPENSSH: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["Encoding", "OpenSSH"],
-);
-pub static ENCODING_PEM: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["Encoding", "PEM"],
-);
-pub static ENCODING_RAW: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["Encoding", "Raw"],
-);
-pub static ENCODING_SMIME: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["Encoding", "SMIME"],
-);
-pub static ENCODING_X962: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["Encoding", "X962"],
-);
-
-pub static PRIVATE_FORMAT: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PrivateFormat"],
-);
-pub static PRIVATE_FORMAT_OPENSSH: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PrivateFormat", "OpenSSH"],
-);
-pub static PRIVATE_FORMAT_PKCS8: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PrivateFormat", "PKCS8"],
-);
-pub static PRIVATE_FORMAT_PKCS12: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PrivateFormat", "PKCS12"],
-);
-pub static PRIVATE_FORMAT_RAW: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PrivateFormat", "Raw"],
-);
-pub static PRIVATE_FORMAT_TRADITIONAL_OPENSSL: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PrivateFormat", "TraditionalOpenSSL"],
-);
-
-pub static PUBLIC_FORMAT: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PublicFormat"],
-);
-pub static PUBLIC_FORMAT_COMPRESSED_POINT: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PublicFormat", "CompressedPoint"],
-);
-pub static PUBLIC_FORMAT_OPENSSH: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PublicFormat", "OpenSSH"],
-);
-pub static PUBLIC_FORMAT_PKCS1: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PublicFormat", "PKCS1"],
-);
-pub static PUBLIC_FORMAT_RAW: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PublicFormat", "Raw"],
-);
-pub static PUBLIC_FORMAT_SUBJECT_PUBLIC_KEY_INFO: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PublicFormat", "SubjectPublicKeyInfo"],
-);
-pub static PUBLIC_FORMAT_UNCOMPRESSED_POINT: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["PublicFormat", "UncompressedPoint"],
-);
-
-pub static PARAMETER_FORMAT_PKCS3: LazyPyImport = LazyPyImport::new(
-    "cryptography.hazmat.primitives.serialization",
-    &["ParameterFormat", "PKCS3"],
-);
-
 pub static KEY_SERIALIZATION_ENCRYPTION: LazyPyImport = LazyPyImport::new(
     "cryptography.hazmat.primitives.serialization",
     &["KeySerializationEncryption"],
@@ -392,6 +313,16 @@ pub static SHA1: LazyPyImport =
     LazyPyImport::new("cryptography.hazmat.primitives.hashes", &["SHA1"]);
 pub static SHA256: LazyPyImport =
     LazyPyImport::new("cryptography.hazmat.primitives.hashes", &["SHA256"]);
+pub static SHA384: LazyPyImport =
+    LazyPyImport::new("cryptography.hazmat.primitives.hashes", &["SHA384"]);
+pub static SHA512: LazyPyImport =
+    LazyPyImport::new("cryptography.hazmat.primitives.hashes", &["SHA512"]);
+pub static SHA3_256: LazyPyImport =
+    LazyPyImport::new("cryptography.hazmat.primitives.hashes", &["SHA3_256"]);
+pub static SHAKE128: LazyPyImport =
+    LazyPyImport::new("cryptography.hazmat.primitives.hashes", &["SHAKE128"]);
+pub static SHAKE256: LazyPyImport =
+    LazyPyImport::new("cryptography.hazmat.primitives.hashes", &["SHAKE256"]);
 
 pub static NO_DIGEST_INFO: LazyPyImport = LazyPyImport::new(
     "cryptography.hazmat.primitives.asymmetric.utils",
@@ -467,6 +398,44 @@ pub static ECDSA: LazyPyImport =
     LazyPyImport::new("cryptography.hazmat.primitives.asymmetric.ec", &["ECDSA"]);
 pub static ECDH: LazyPyImport =
     LazyPyImport::new("cryptography.hazmat.primitives.asymmetric.ec", &["ECDH"]);
+pub static SECP256R1: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    &["SECP256R1"],
+);
+pub static SECP384R1: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    &["SECP384R1"],
+);
+pub static SECP521R1: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.ec",
+    &["SECP521R1"],
+);
+
+pub static X25519_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.x25519",
+    &["X25519PublicKey"],
+);
+pub static X25519_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.x25519",
+    &["X25519PrivateKey"],
+);
+
+pub static MLKEM768_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mlkem",
+    &["MLKEM768PublicKey"],
+);
+pub static MLKEM768_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mlkem",
+    &["MLKEM768PrivateKey"],
+);
+pub static MLKEM1024_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mlkem",
+    &["MLKEM1024PublicKey"],
+);
+pub static MLKEM1024_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mlkem",
+    &["MLKEM1024PrivateKey"],
+);
 
 pub static ED25519_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
     "cryptography.hazmat.primitives.asymmetric.ed25519",
@@ -486,13 +455,40 @@ pub static ED448_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
     &["Ed448PublicKey"],
 );
 
+pub static MLDSA44_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mldsa",
+    &["MLDSA44PrivateKey"],
+);
+pub static MLDSA44_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mldsa",
+    &["MLDSA44PublicKey"],
+);
+pub static MLDSA65_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mldsa",
+    &["MLDSA65PrivateKey"],
+);
+pub static MLDSA65_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mldsa",
+    &["MLDSA65PublicKey"],
+);
+pub static MLDSA87_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mldsa",
+    &["MLDSA87PrivateKey"],
+);
+pub static MLDSA87_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
+    "cryptography.hazmat.primitives.asymmetric.mldsa",
+    &["MLDSA87PublicKey"],
+);
+
+// These use the private aliases so that looking them up doesn't emit the
+// DSA deprecation warning.
 pub static DSA_PRIVATE_KEY: LazyPyImport = LazyPyImport::new(
     "cryptography.hazmat.primitives.asymmetric.dsa",
-    &["DSAPrivateKey"],
+    &["_DSAPrivateKey"],
 );
 pub static DSA_PUBLIC_KEY: LazyPyImport = LazyPyImport::new(
     "cryptography.hazmat.primitives.asymmetric.dsa",
-    &["DSAPublicKey"],
+    &["_DSAPublicKey"],
 );
 
 #[cfg(not(Py_3_11))]

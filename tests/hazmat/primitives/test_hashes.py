@@ -4,11 +4,12 @@
 
 
 import binascii
+import sys
+import typing
 
 import pytest
 
 from cryptography.exceptions import AlreadyFinalized, _Reasons
-from cryptography.hazmat.bindings._rust import openssl as rust_openssl
 from cryptography.hazmat.primitives import hashes
 
 from ...doubles import DummyHashAlgorithm
@@ -17,17 +18,17 @@ from .utils import generate_base_hash_test
 
 
 class TestHashContext:
-    def test_hash_reject_unicode(self, backend):
-        m = hashes.Hash(hashes.SHA1(), backend=backend)
+    def test_hash_reject_unicode(self):
+        m = hashes.Hash(hashes.SHA1())
         with pytest.raises(TypeError):
-            m.update("\u00fc")  # type: ignore[arg-type]
+            m.update(typing.cast(typing.Any, "\u00fc"))
 
-    def test_hash_algorithm_instance(self, backend):
+    def test_hash_algorithm_instance(self):
         with pytest.raises(TypeError):
-            hashes.Hash(hashes.SHA1, backend=backend)  # type: ignore[arg-type]
+            hashes.Hash(typing.cast(typing.Any, hashes.SHA1))
 
-    def test_raises_after_finalize(self, backend):
-        h = hashes.Hash(hashes.SHA1(), backend=backend)
+    def test_raises_after_finalize(self):
+        h = hashes.Hash(hashes.SHA1())
         h.finalize()
 
         with pytest.raises(AlreadyFinalized):
@@ -39,9 +40,9 @@ class TestHashContext:
         with pytest.raises(AlreadyFinalized):
             h.finalize()
 
-    def test_unsupported_hash(self, backend):
+    def test_unsupported_hash(self):
         with raises_unsupported_algorithm(_Reasons.UNSUPPORTED_HASH):
-            hashes.Hash(DummyHashAlgorithm(), backend)
+            hashes.Hash(DummyHashAlgorithm())
 
 
 @pytest.mark.supported(
@@ -55,10 +56,6 @@ class TestSHA1:
     )
 
 
-@pytest.mark.supported(
-    only_if=lambda backend: backend.hash_supported(hashes.SHA224()),
-    skip_message="Does not support SHA224",
-)
 class TestSHA224:
     test_sha224 = generate_base_hash_test(
         hashes.SHA224(),
@@ -66,10 +63,6 @@ class TestSHA224:
     )
 
 
-@pytest.mark.supported(
-    only_if=lambda backend: backend.hash_supported(hashes.SHA256()),
-    skip_message="Does not support SHA256",
-)
 class TestSHA256:
     test_sha256 = generate_base_hash_test(
         hashes.SHA256(),
@@ -77,10 +70,6 @@ class TestSHA256:
     )
 
 
-@pytest.mark.supported(
-    only_if=lambda backend: backend.hash_supported(hashes.SHA384()),
-    skip_message="Does not support SHA384",
-)
 class TestSHA384:
     test_sha384 = generate_base_hash_test(
         hashes.SHA384(),
@@ -88,10 +77,6 @@ class TestSHA384:
     )
 
 
-@pytest.mark.supported(
-    only_if=lambda backend: backend.hash_supported(hashes.SHA512()),
-    skip_message="Does not support SHA512",
-)
 class TestSHA512:
     test_sha512 = generate_base_hash_test(
         hashes.SHA512(),
@@ -122,7 +107,7 @@ class TestBLAKE2b:
         digest_size=64,
     )
 
-    def test_invalid_digest_size(self, backend):
+    def test_invalid_digest_size(self):
         with pytest.raises(ValueError):
             hashes.BLAKE2b(digest_size=65)
 
@@ -145,7 +130,7 @@ class TestBLAKE2s:
         digest_size=32,
     )
 
-    def test_invalid_digest_size(self, backend):
+    def test_invalid_digest_size(self):
         with pytest.raises(ValueError):
             hashes.BLAKE2s(digest_size=33)
 
@@ -156,9 +141,15 @@ class TestBLAKE2s:
             hashes.BLAKE2s(digest_size=-1)
 
 
-def test_buffer_protocol_hash(backend):
+def test_non_contiguous_buffer_rejected():
+    h = hashes.Hash(hashes.SHA256())
+    with pytest.raises((TypeError, BufferError)):
+        h.update(memoryview(bytearray(10))[::-1])
+
+
+def test_buffer_protocol_hash():
     data = binascii.unhexlify(b"b4190e")
-    h = hashes.Hash(hashes.SHA256(), backend)
+    h = hashes.Hash(hashes.SHA256())
     h.update(bytearray(data))
     assert h.finalize() == binascii.unhexlify(
         b"dff2e73091f6c05e528896c4c831b9448653dc2ff043528f6769437bc7b975c2"
@@ -175,18 +166,22 @@ class TestHashHash:
 
     def test_hash_algorithm_instance(self):
         with pytest.raises(TypeError):
-            hashes.Hash.hash(hashes.SHA1, b"data")  # type: ignore[arg-type]
+            hashes.Hash.hash(typing.cast(typing.Any, hashes.SHA1), b"data")
 
     def test_hash_reject_unicode(self):
         with pytest.raises(TypeError):
-            hashes.Hash.hash(hashes.SHA256(), "\u00fc")  # type: ignore[arg-type]
+            hashes.Hash.hash(
+                hashes.SHA256(), typing.cast(typing.Any, "\u00fc")
+            )
 
     def test_hash_unsupported_algorithm(self):
         with raises_unsupported_algorithm(_Reasons.UNSUPPORTED_HASH):
             hashes.Hash.hash(DummyHashAlgorithm(), b"data")
 
     @pytest.mark.supported(
-        only_if=lambda _: rust_openssl.CRYPTOGRAPHY_OPENSSL_330_OR_GREATER,
+        only_if=lambda backend: backend.hash_supported(
+            hashes.SHAKE256(digest_size=32)
+        ),
         skip_message="Requires backend with XOF support",
     )
     def test_hash_xof(self):
@@ -195,6 +190,54 @@ class TestHashHash:
             b"\xc7=\xbe\xd8R\x7fZ\xe0V\x86y\xf3\x0e\xcc\\\xb6\x97\x8b!\x08"
             b"\xe9\\\x86\x08\x84\xa6\\\x13\x1f\x99\xb9\xb9"
         )
+
+
+class TestHashAlgorithmEquality:
+    @pytest.mark.parametrize(
+        "algorithm_cls",
+        [
+            hashes.SHA1,
+            hashes.SHA512_224,
+            hashes.SHA512_256,
+            hashes.SHA224,
+            hashes.SHA256,
+            hashes.SHA384,
+            hashes.SHA512,
+            hashes.SHA3_224,
+            hashes.SHA3_256,
+            hashes.SHA3_384,
+            hashes.SHA3_512,
+            hashes.MD5,
+            hashes.SM3,
+        ],
+    )
+    def test_eq(self, algorithm_cls):
+        assert algorithm_cls() == algorithm_cls()
+        assert algorithm_cls() != DummyHashAlgorithm()
+        assert DummyHashAlgorithm() != algorithm_cls()
+        assert algorithm_cls() != object()
+
+    def test_ne_different_algorithm(self):
+        assert hashes.SHA256() != hashes.SHA384()
+
+    @pytest.mark.parametrize(
+        ("algorithm_cls", "digest_size"),
+        [
+            (hashes.SHAKE128, 32),
+            (hashes.SHAKE256, 32),
+            (hashes.BLAKE2b, 64),
+            (hashes.BLAKE2s, 32),
+        ],
+    )
+    def test_eq_digest_size(self, algorithm_cls, digest_size):
+        assert algorithm_cls(digest_size) == algorithm_cls(digest_size)
+        assert algorithm_cls(digest_size) != DummyHashAlgorithm(digest_size)
+        assert DummyHashAlgorithm(digest_size) != algorithm_cls(digest_size)
+        assert algorithm_cls(digest_size) != object()
+
+    @pytest.mark.parametrize("xof", [hashes.SHAKE128, hashes.SHAKE256])
+    def test_ne_different_digest_size(self, xof):
+        assert xof(digest_size=32) != xof(digest_size=64)
 
 
 class TestSHAKE:
@@ -210,6 +253,12 @@ class TestSHAKE:
 
         with pytest.raises(ValueError):
             xof(digest_size=0)
+
+    @pytest.mark.parametrize("xof", [hashes.SHAKE128, hashes.SHAKE256])
+    def test_xof(self, xof):
+        algorithm = xof.xof()
+        assert isinstance(algorithm, xof)
+        assert algorithm.digest_size == sys.maxsize
 
 
 @pytest.mark.supported(

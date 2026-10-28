@@ -2,7 +2,10 @@
 # 2.0, and the BSD License. See the LICENSE file in the root of this repository
 # for complete details.
 
+from __future__ import annotations
+
 from cryptography.hazmat.asn1.asn1 import (
+    TLV,
     BitString,
     Default,
     Explicit,
@@ -11,15 +14,19 @@ from cryptography.hazmat.asn1.asn1 import (
     Implicit,
     Null,
     PrintableString,
+    SetOf,
     Size,
-    UtcTime,
+    UTCTime,
     Variant,
     decode_der,
     encode_der,
     sequence,
+    set,
+    value_set,
 )
 
 __all__ = [
+    "TLV",
     "BitString",
     "Default",
     "Explicit",
@@ -28,10 +35,13 @@ __all__ = [
     "Implicit",
     "Null",
     "PrintableString",
+    "SetOf",
     "Size",
-    "UtcTime",
+    "UTCTime",
     "Variant",
     "decode_der",
     "encode_der",
     "sequence",
+    "set",
+    "value_set",
 ]

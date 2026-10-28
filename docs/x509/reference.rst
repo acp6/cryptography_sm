@@ -248,7 +248,7 @@ Loading Certificate Revocation Lists
         >>> from cryptography import x509
         >>> from cryptography.hazmat.primitives import hashes
         >>> crl = x509.load_pem_x509_crl(pem_crl_data)
-        >>> isinstance(crl.signature_hash_algorithm, hashes.SHA256)
+        >>> crl.signature_hash_algorithm == hashes.SHA256()
         True
 
 .. function:: load_der_x509_crl(data)
@@ -287,7 +287,7 @@ Loading Certificate Signing Requests
         >>> from cryptography import x509
         >>> from cryptography.hazmat.primitives import hashes
         >>> csr = x509.load_pem_x509_csr(pem_req_data)
-        >>> isinstance(csr.signature_hash_algorithm, hashes.SHA256)
+        >>> csr.signature_hash_algorithm == hashes.SHA256()
         True
 
 .. function:: load_der_x509_csr(data)
@@ -477,7 +477,7 @@ X.509 Certificate Object
         .. doctest::
 
             >>> from cryptography.hazmat.primitives import hashes
-            >>> isinstance(cert.signature_hash_algorithm, hashes.SHA256)
+            >>> cert.signature_hash_algorithm == hashes.SHA256()
             True
 
     .. attribute:: signature_algorithm_oid
@@ -716,7 +716,7 @@ X.509 CRL (Certificate Revocation List) Object
         .. doctest::
 
             >>> from cryptography.hazmat.primitives import hashes
-            >>> isinstance(crl.signature_hash_algorithm, hashes.SHA256)
+            >>> crl.signature_hash_algorithm == hashes.SHA256()
             True
 
     .. attribute:: signature_algorithm_oid
@@ -887,7 +887,7 @@ X.509 Certificate Builder
     .. versionadded:: 1.0
 
     .. note::
-       All methods, except :meth:`sign`, return a **new** CertificateBuilder
+       All methods, except :meth:`sign` and :meth:`create_unsigned`, return a **new** CertificateBuilder
        instance with the corresponding updated value. They do not modify the
        existing builder in place.
 
@@ -948,12 +948,26 @@ X.509 Certificate Builder
 
         :return: A new :class:`CertificateBuilder` with the updated subject name.
 
-    .. method:: public_key(public_key)
+    .. method:: public_key(public_key, *, rsa_padding=None)
 
         Sets the subject's public key.
 
+        .. versionchanged:: 49.0.0
+
+            Added the ``rsa_padding`` keyword-only parameter.
+
         :param public_key: The subject's public key. This can be one of
             :data:`~cryptography.hazmat.primitives.asymmetric.types.CertificatePublicKeyTypes`.
+
+        :param rsa_padding: This keyword argument is only valid with
+            :class:`~cryptography.hazmat.primitives.asymmetric.rsa.RSAPublicKey`.
+            The caller can pass an uninstantiated
+            :class:`~cryptography.hazmat.primitives.asymmetric.padding.PSS`
+            class or ``None``. If ``PSS`` is passed the ``id-RSASSA-PSS`` OID
+            (with no parameters) will be encoded into the public key, which
+            marks it as usable for only PSS signatures. This does not affect
+            the certificate's signature, only the public key encoding within
+            the certificate.
 
         :return: A new :class:`CertificateBuilder` with the updated public key.
 
@@ -1022,9 +1036,14 @@ X.509 Certificate Builder
             :class:`~cryptography.hazmat.primitives.hashes.HashAlgorithm` that
             will be used to generate the signature. This must be ``None`` if
             the ``private_key`` is an
-            :class:`~cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey`
-            or an
-            :class:`~cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey`
+            :class:`~cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey`,
+            an
+            :class:`~cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey`,
+            or an ML-DSA key (one of
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA44PrivateKey`,
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA65PrivateKey`,
+            or
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA87PrivateKey`),
             and an instance of a
             :class:`~cryptography.hazmat.primitives.hashes.HashAlgorithm`
             otherwise.
@@ -1058,6 +1077,14 @@ X.509 Certificate Builder
             key types **must** not pass a value other than ``None``.
 
         :type ecdsa_deterministic: ``None``, ``bool``
+
+        :returns: :class:`~cryptography.x509.Certificate`
+
+    .. method:: create_unsigned()
+
+        .. versionadded:: 50.0.0
+
+        Creates an unsigned certificate, per :rfc:`9925`.
 
         :returns: :class:`~cryptography.x509.Certificate`
 
@@ -1119,7 +1146,7 @@ X.509 CSR (Certificate Signing Request) Object
         .. doctest::
 
             >>> from cryptography.hazmat.primitives import hashes
-            >>> isinstance(csr.signature_hash_algorithm, hashes.SHA256)
+            >>> csr.signature_hash_algorithm == hashes.SHA256()
             True
 
     .. attribute:: signature_algorithm_oid
@@ -1311,9 +1338,14 @@ X.509 Certificate Revocation List Builder
             :class:`~cryptography.hazmat.primitives.hashes.HashAlgorithm` that
             will be used to generate the signature.
             This must be ``None`` if the ``private_key`` is an
-            :class:`~cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey`
-            or an
-            :class:`~cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey`
+            :class:`~cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey`,
+            an
+            :class:`~cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey`,
+            or an ML-DSA key (one of
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA44PrivateKey`,
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA65PrivateKey`,
+            or
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA87PrivateKey`),
             and an instance of a
             :class:`~cryptography.hazmat.primitives.hashes.HashAlgorithm`
             otherwise.
@@ -1538,9 +1570,14 @@ X.509 CSR (Certificate Signing Request) Builder Object
             :class:`~cryptography.hazmat.primitives.hashes.HashAlgorithm`
             that will be used to generate the request signature.
             This must be ``None`` if the ``private_key`` is an
-            :class:`~cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey`
-            or an
-            :class:`~cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey`
+            :class:`~cryptography.hazmat.primitives.asymmetric.ed25519.Ed25519PrivateKey`,
+            an
+            :class:`~cryptography.hazmat.primitives.asymmetric.ed448.Ed448PrivateKey`,
+            or an ML-DSA key (one of
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA44PrivateKey`,
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA65PrivateKey`,
+            or
+            :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA87PrivateKey`),
             and an instance of a
             :class:`~cryptography.hazmat.primitives.hashes.HashAlgorithm`
             otherwise.
@@ -1617,6 +1654,23 @@ X.509 CSR (Certificate Signing Request) Builder Object
         .. versionadded:: 1.6
 
         :type: list of :class:`RelativeDistinguishedName`
+
+    .. classmethod:: from_bytes(data)
+
+        .. versionadded:: 49.0.0
+
+        Parse a DER encoded name (the inverse of :meth:`public_bytes`).
+
+        :param bytes data: The DER encoded name.
+
+        :returns: A :class:`Name` parsed from ``data``.
+
+        .. doctest::
+
+            >>> x509.Name.from_bytes(
+            ...     b"0\x1a1\x180\x16\x06\x03U\x04\x03\x0c\x0fcryptography.io"
+            ... )
+            <Name(CN=cryptography.io)>
 
     .. classmethod:: from_rfc4514_string(data, attr_name_overrides=None)
 
@@ -3615,6 +3669,13 @@ instances. The following common OIDs are available as constants.
 
         Corresponds to the dotted string ``"2.5.4.17"``.
 
+    .. attribute:: UNSIGNED
+
+        .. versionadded:: 50.0.0
+
+        Corresponds to the dotted string ``"1.3.6.1.5.5.7.25.1"``. Used in
+        unsigned certificates. See :rfc:`9925`.
+
     .. attribute:: UNSTRUCTURED_NAME
 
         .. versionadded:: 3.0
@@ -3773,6 +3834,34 @@ instances. The following common OIDs are available as constants.
 
         Corresponds to the dotted string ``"1.3.101.113"``. This is a signature
         using an ed448 key.
+
+    .. attribute:: ML_DSA_44
+
+        .. versionadded:: 49.0.0
+
+        Corresponds to the dotted string ``"2.16.840.1.101.3.4.3.17"``. This is
+        a signature using an ML-DSA-44 key.
+
+    .. attribute:: ML_DSA_65
+
+        .. versionadded:: 49.0.0
+
+        Corresponds to the dotted string ``"2.16.840.1.101.3.4.3.18"``. This is
+        a signature using an ML-DSA-65 key.
+
+    .. attribute:: ML_DSA_87
+
+        .. versionadded:: 49.0.0
+
+        Corresponds to the dotted string ``"2.16.840.1.101.3.4.3.19"``. This is
+        a signature using an ML-DSA-87 key.
+
+    .. attribute:: UNSIGNED
+
+        .. versionadded:: 50.0.0
+
+        Corresponds to the dotted string ``"1.3.6.1.5.5.7.6.36"``. This indicates
+        that there is no signature. See :rfc:`9925`.
 
 
 .. class:: ExtendedKeyUsageOID
@@ -4246,6 +4335,30 @@ instances. The following common OIDs are available as constants.
 
         Corresponds to the dotted string ``"1.3.101.113"``. This is a
         :class:`~cryptography.hazmat.primitives.asymmetric.ed448.Ed448PublicKey`
+        public key.
+
+    .. attribute:: ML_DSA_44
+
+        .. versionadded:: 49.0.0
+
+        Corresponds to the dotted string ``"2.16.840.1.101.3.4.3.17"``. This is
+        a :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA44PublicKey`
+        public key.
+
+    .. attribute:: ML_DSA_65
+
+        .. versionadded:: 49.0.0
+
+        Corresponds to the dotted string ``"2.16.840.1.101.3.4.3.18"``. This is
+        a :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA65PublicKey`
+        public key.
+
+    .. attribute:: ML_DSA_87
+
+        .. versionadded:: 49.0.0
+
+        Corresponds to the dotted string ``"2.16.840.1.101.3.4.3.19"``. This is
+        a :class:`~cryptography.hazmat.primitives.asymmetric.mldsa.MLDSA87PublicKey`
         public key.
 
 

@@ -7,7 +7,13 @@ use pyo3::types::PyAnyMethods;
 use crate::backend::utils;
 use crate::buf::CffiBuf;
 use crate::error::{CryptographyError, CryptographyResult};
-use crate::{error, exceptions};
+use crate::{error, exceptions, types};
+
+fn warn_dsa_deprecated(py: pyo3::Python<'_>) -> pyo3::PyResult<()> {
+    let warning_cls = types::DEPRECATED_IN_51.get(py)?;
+    let message = c"DSA is deprecated and support will be removed in a future release. Use a more modern signature algorithm.";
+    pyo3::PyErr::warn(py, &warning_cls, message, 1)
+}
 
 #[pyo3::pyclass(
     frozen,
@@ -37,24 +43,28 @@ struct DsaParameters {
 }
 
 pub(crate) fn private_key_from_pkey(
+    py: pyo3::Python<'_>,
     pkey: &openssl::pkey::PKeyRef<openssl::pkey::Private>,
-) -> DsaPrivateKey {
-    DsaPrivateKey {
+) -> CryptographyResult<DsaPrivateKey> {
+    warn_dsa_deprecated(py)?;
+    Ok(DsaPrivateKey {
         pkey: pkey.to_owned(),
-    }
+    })
 }
 
 pub(crate) fn public_key_from_pkey(
+    py: pyo3::Python<'_>,
     pkey: &openssl::pkey::PKeyRef<openssl::pkey::Public>,
-) -> DsaPublicKey {
-    DsaPublicKey {
+) -> CryptographyResult<DsaPublicKey> {
+    warn_dsa_deprecated(py)?;
+    Ok(DsaPublicKey {
         pkey: pkey.to_owned(),
-    }
+    })
 }
 
 #[pyo3::pyfunction]
-fn generate_parameters(key_size: u32) -> CryptographyResult<DsaParameters> {
-    let dsa = openssl::dsa::Dsa::generate_params(key_size)?;
+fn generate_parameters(py: pyo3::Python<'_>, key_size: u32) -> CryptographyResult<DsaParameters> {
+    let dsa = py.detach(|| openssl::dsa::Dsa::generate_params(key_size))?;
     Ok(DsaParameters { dsa })
 }
 
@@ -76,13 +86,19 @@ impl DsaPrivateKey {
 
         let mut signer = openssl::pkey_ctx::PkeyCtx::new(&self.pkey)?;
         signer.sign_init()?;
-        let mut sig = vec![];
-        signer.sign_to_vec(data.as_bytes(), &mut sig).map_err(|e| {
-            pyo3::exceptions::PyValueError::new_err((
-                "DSA signing failed. This generally indicates an invalid key.",
-                error::list_from_openssl_error(py, &e).unbind(),
-            ))
-        })?;
+        let data_bytes = data.as_bytes();
+        let sig = py
+            .detach(|| {
+                let mut sig = vec![];
+                signer.sign_to_vec(data_bytes, &mut sig)?;
+                Ok::<_, openssl::error::ErrorStack>(sig)
+            })
+            .map_err(|e| {
+                pyo3::exceptions::PyValueError::new_err((
+                    "DSA signing failed. This generally indicates an invalid key.",
+                    error::list_from_openssl_error(py, &e).unbind(),
+                ))
+            })?;
         Ok(pyo3::types::PyBytes::new(py, &sig))
     }
 
@@ -137,8 +153,8 @@ impl DsaPrivateKey {
     fn private_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PrivateFormat,
         encryption_algorithm: &pyo3::Bound<'p, pyo3::PyAny>,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         utils::pkey_private_bytes(
@@ -178,9 +194,9 @@ impl DsaPublicKey {
 
         let mut verifier = openssl::pkey_ctx::PkeyCtx::new(&self.pkey)?;
         verifier.verify_init()?;
-        let valid = verifier
-            .verify(data.as_bytes(), signature.as_bytes())
-            .unwrap_or(false);
+        let data_bytes = data.as_bytes();
+        let sig_bytes = signature.as_bytes();
+        let valid = py.detach(|| verifier.verify(data_bytes, sig_bytes).unwrap_or(false));
         if !valid {
             return Err(CryptographyError::from(
                 exceptions::InvalidSignature::new_err(()),
@@ -223,8 +239,8 @@ impl DsaPublicKey {
     fn public_bytes<'p>(
         slf: &pyo3::Bound<'p, Self>,
         py: pyo3::Python<'p>,
-        encoding: &pyo3::Bound<'p, pyo3::PyAny>,
-        format: &pyo3::Bound<'p, pyo3::PyAny>,
+        encoding: crate::serialization::Encoding,
+        format: crate::serialization::PublicFormat,
     ) -> CryptographyResult<pyo3::Bound<'p, pyo3::types::PyBytes>> {
         utils::pkey_public_bytes(py, slf, &slf.borrow().pkey, encoding, format, true, false)
     }

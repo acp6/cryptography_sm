@@ -101,6 +101,7 @@ static const long X509_V_FLAG_EXPLICIT_POLICY;
 static const long X509_V_FLAG_INHIBIT_MAP;
 static const long X509_V_FLAG_CHECK_SS_SIGNATURE;
 static const long X509_V_FLAG_PARTIAL_CHAIN;
+static const long X509_V_FLAG_EXTENDED_CRL_SUPPORT;
 
 static const long X509_CHECK_FLAG_ALWAYS_CHECK_SUBJECT;
 static const long X509_CHECK_FLAG_NO_WILDCARDS;
@@ -131,7 +132,6 @@ int X509_STORE_add_cert(X509_STORE *, X509 *);
 int X509_STORE_add_crl(X509_STORE *, X509_CRL *);
 int X509_STORE_load_locations(X509_STORE *, const char *, const char *);
 int X509_STORE_set1_param(X509_STORE *, X509_VERIFY_PARAM *);
-int X509_STORE_set_default_paths(X509_STORE *);
 int X509_STORE_set_flags(X509_STORE *, unsigned long);
 /* Included due to external consumer, see
    https://github.com/pyca/pyopenssl/issues/1031 */
@@ -141,7 +141,6 @@ void X509_STORE_free(X509_STORE *);
 
 /* X509_STORE_CTX */
 X509_STORE_CTX *X509_STORE_CTX_new(void);
-void X509_STORE_CTX_cleanup(X509_STORE_CTX *);
 void X509_STORE_CTX_free(X509_STORE_CTX *);
 int X509_STORE_CTX_init(X509_STORE_CTX *, X509_STORE *, X509 *,
                         Cryptography_STACK_OF_X509 *);
@@ -158,6 +157,7 @@ int X509_VERIFY_PARAM_set_flags(X509_VERIFY_PARAM *, unsigned long);
 void X509_VERIFY_PARAM_set_time(X509_VERIFY_PARAM *, time_t);
 void X509_VERIFY_PARAM_free(X509_VERIFY_PARAM *);
 
+/* Included due to external consumer (mitmproxy) */
 int X509_VERIFY_PARAM_set1_host(X509_VERIFY_PARAM *, const char *,
                                 size_t);
 void X509_VERIFY_PARAM_set_hostflags(X509_VERIFY_PARAM *, unsigned int);

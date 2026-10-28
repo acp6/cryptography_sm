@@ -10,7 +10,6 @@ import os
 import re
 import typing
 import warnings
-from base64 import encodebytes as _base64_encode
 from dataclasses import dataclass
 
 from cryptography import utils
@@ -82,9 +81,6 @@ _NONE = b"none"
 _DEFAULT_CIPHER = b"aes256-ctr"
 _DEFAULT_ROUNDS = 16
 
-# re is only way to work on bytes-like data
-_PEM_RC = re.compile(_SK_START + b"(.*?)" + _SK_END, re.DOTALL)
-
 # padding for max blocksize
 _PADDING = memoryview(bytearray(range(1, 1 + 16)))
 
@@ -146,7 +142,7 @@ def _get_ssh_key_type(key: SSHPrivateKeyTypes | SSHPublicKeyTypes) -> bytes:
         key_type = _ecdsa_key_type(key)
     elif isinstance(key, (rsa.RSAPrivateKey, rsa.RSAPublicKey)):
         key_type = _SSH_RSA
-    elif isinstance(key, (dsa.DSAPrivateKey, dsa.DSAPublicKey)):
+    elif isinstance(key, (dsa._DSAPrivateKey, dsa._DSAPublicKey)):
         key_type = _SSH_DSA
     elif isinstance(
         key, (ed25519.Ed25519PrivateKey, ed25519.Ed25519PublicKey)
@@ -166,14 +162,6 @@ def _ecdsa_key_type(public_key: ec.EllipticCurvePublicKey) -> bytes:
             f"Unsupported curve for ssh private key: {curve.name!r}"
         )
     return _ECDSA_KEY_TYPE[curve.name]
-
-
-def _ssh_pem_encode(
-    data: utils.Buffer,
-    prefix: bytes = _SK_START + b"\n",
-    suffix: bytes = _SK_END + b"\n",
-) -> bytes:
-    return b"".join([prefix, _base64_encode(data), suffix])
 
 
 def _check_block_size(data: utils.Buffer, block_len: int) -> None:
@@ -400,8 +388,8 @@ class _SSHFormatDSA:
     ) -> tuple[dsa.DSAPublicKey, memoryview]:
         """Make DSA public key from data."""
         (p, q, g, y), data = self.get_public(data)
-        parameter_numbers = dsa.DSAParameterNumbers(p, q, g)
-        public_numbers = dsa.DSAPublicNumbers(y, parameter_numbers)
+        parameter_numbers = dsa._DSAParameterNumbers(p, q, g)
+        public_numbers = dsa._DSAPublicNumbers(y, parameter_numbers)
         self._validate(public_numbers)
         public_key = public_numbers.public_key()
         return public_key, data
@@ -415,10 +403,10 @@ class _SSHFormatDSA:
 
         if (p, q, g, y) != pubfields:
             raise ValueError("Corrupt data: dsa field mismatch")
-        parameter_numbers = dsa.DSAParameterNumbers(p, q, g)
-        public_numbers = dsa.DSAPublicNumbers(y, parameter_numbers)
+        parameter_numbers = dsa._DSAParameterNumbers(p, q, g)
+        public_numbers = dsa._DSAPublicNumbers(y, parameter_numbers)
         self._validate(public_numbers)
-        private_numbers = dsa.DSAPrivateNumbers(x, public_numbers)
+        private_numbers = dsa._DSAPrivateNumbers(x, public_numbers)
         private_key = private_numbers.private_key()
         return private_key, data
 
@@ -498,6 +486,13 @@ class _SSHFormatECDSA:
         if (curve_name, point) != pubfields:
             raise ValueError("Corrupt data: ecdsa field mismatch")
         private_key = ec.derive_private_key(secret, self.curve)
+        public_point = private_key.public_key().public_bytes(
+            Encoding.X962, PublicFormat.UncompressedPoint
+        )
+        if point != public_point:
+            raise ValueError(
+                "Corrupt data: ecdsa public key does not match private key"
+            )
         return private_key, data
 
     def encode_public(
@@ -560,6 +555,13 @@ class _SSHFormatEd25519:
         if point != point2 or (point,) != pubfields:
             raise ValueError("Corrupt data: ed25519 field mismatch")
         private_key = ed25519.Ed25519PrivateKey.from_private_bytes(secret)
+        public_point = private_key.public_key().public_bytes(
+            Encoding.Raw, PublicFormat.Raw
+        )
+        if point != public_point:
+            raise ValueError(
+                "Corrupt data: ed25519 public key does not match private key"
+            )
         return private_key, data
 
     def encode_public(
@@ -676,7 +678,7 @@ def _lookup_kformat(key_type: utils.Buffer):
 SSHPrivateKeyTypes = typing.Union[
     ec.EllipticCurvePrivateKey,
     rsa.RSAPrivateKey,
-    dsa.DSAPrivateKey,
+    dsa._DSAPrivateKey,
     ed25519.Ed25519PrivateKey,
 ]
 
@@ -693,11 +695,19 @@ def load_ssh_private_key(
     if password is not None:
         utils._check_bytes("password", password)
 
-    m = _PEM_RC.search(data)
-    if not m:
+    # The base64 body lies between the first opening marker and the first
+    # closing marker after it. Two linear scans find them; anchoring the
+    # second scan past the opening marker keeps the total work linear in the
+    # length of the input even when there is no closing marker to find.
+    # bytes.find does not accept a memoryview, which _check_byteslike permits.
+    buf = data if isinstance(data, (bytes, bytearray)) else bytes(data)
+    p1 = buf.find(_SK_START)
+    if p1 == -1:
         raise ValueError("Not OpenSSH private key format")
-    p1 = m.start(1)
-    p2 = m.end(1)
+    p1 += len(_SK_START)
+    p2 = buf.find(_SK_END, p1)
+    if p2 == -1:
+        raise ValueError("Not OpenSSH private key format")
     data = binascii.a2b_base64(memoryview(data)[p1:p2])
     if not data.startswith(_SK_MAGIC):
         raise ValueError("Not OpenSSH private key format")
@@ -784,7 +794,7 @@ def load_ssh_private_key(
     if edata != _PADDING[: len(edata)]:
         raise ValueError("Corrupt data: invalid padding")
 
-    if isinstance(private_key, dsa.DSAPrivateKey):
+    if isinstance(private_key, dsa._DSAPrivateKey):
         warnings.warn(
             "SSH DSA keys are deprecated and will be removed in a future "
             "release.",
@@ -802,7 +812,7 @@ def _serialize_ssh_private_key(
 ) -> bytes:
     """Serialize private key with OpenSSH custom encoding."""
     utils._check_bytes("password", password)
-    if isinstance(private_key, dsa.DSAPrivateKey):
+    if isinstance(private_key, dsa._DSAPrivateKey):
         warnings.warn(
             "SSH DSA key support is deprecated and will be "
             "removed in a future release",
@@ -865,17 +875,17 @@ def _serialize_ssh_private_key(
     f_main.render(buf)
     ofs = mlen - slen
 
-    # encrypt in-place
+    # encrypt the secrets section
     if ciph is not None:
-        ciph.encryptor().update_into(buf[ofs:mlen], buf[ofs:])
+        ciph.encryptor().update_into(bytes(buf[ofs:mlen]), buf[ofs:])
 
-    return _ssh_pem_encode(buf[:mlen])
+    return bytes(buf[:mlen])
 
 
 SSHPublicKeyTypes = typing.Union[
     ec.EllipticCurvePublicKey,
     rsa.RSAPublicKey,
-    dsa.DSAPublicKey,
+    dsa._DSAPublicKey,
     ed25519.Ed25519PublicKey,
 ]
 
@@ -1153,10 +1163,13 @@ def _parse_exts_opts(exts_opts: memoryview) -> dict[bytes, bytes]:
 
 def ssh_key_fingerprint(
     key: SSHPublicKeyTypes,
-    hash_algorithm: hashes.MD5 | hashes.SHA256,
+    hash_algorithm: hashes.MD5 | hashes.SHA1 | hashes.SHA256,
 ) -> bytes:
-    if not isinstance(hash_algorithm, (hashes.MD5, hashes.SHA256)):
-        raise TypeError("hash_algorithm must be either MD5 or SHA256")
+    if not isinstance(
+        hash_algorithm,
+        (hashes.MD5, hashes.SHA1, hashes.SHA256),
+    ):
+        raise TypeError("hash_algorithm must be either MD5, SHA1, or SHA256")
 
     key_type = _get_ssh_key_type(key)
     kformat = _lookup_kformat(key_type)
@@ -1183,7 +1196,7 @@ def load_ssh_public_key(
     else:
         public_key = cert_or_key
 
-    if isinstance(public_key, dsa.DSAPublicKey):
+    if isinstance(public_key, dsa._DSAPublicKey):
         warnings.warn(
             "SSH DSA keys are deprecated and will be removed in a future "
             "release.",
@@ -1195,7 +1208,7 @@ def load_ssh_public_key(
 
 def serialize_ssh_public_key(public_key: SSHPublicKeyTypes) -> bytes:
     """One-line public key format for OpenSSH"""
-    if isinstance(public_key, dsa.DSAPublicKey):
+    if isinstance(public_key, dsa._DSAPublicKey):
         warnings.warn(
             "SSH DSA key support is deprecated and will be "
             "removed in a future release",

@@ -50,6 +50,10 @@ extensions = [
     "sphinx_inline_tabs",
 ]
 
+doctest_global_setup = """
+from cryptography.hazmat.backends.openssl.backend import backend as _backend
+"""
+
 if spelling is not None:
     extensions.append("sphinxcontrib.spelling")
 
@@ -209,6 +213,8 @@ linkcheck_ignore = [
     r"https://github.com",
     # 403s
     r"https://e-trust.gosuslugi.ru/",
+    # IACR appears to block requests from GitHub Actions
+    r"https://eprint.iacr.org",
 ]
 
 autosectionlabel_prefix_document = True
