@@ -10,6 +10,9 @@ Changelog
 
 * Require CFFI 2.1.1 or newer on Python 3.15 to avoid an ABI issue in
   earlier CFFI releases.
+* Added :class:`~cryptography.hazmat.primitives.ciphers.aead.SM4GCM` and
+  :class:`~cryptography.hazmat.primitives.ciphers.aead.SM4CCM` AEAD
+  classes, which require an OpenSSL build with SM4 support.
 * :func:`~cryptography.hazmat.primitives.serialization.load_der_private_key`
   and :func:`~cryptography.hazmat.primitives.serialization.load_pem_private_key`
   now accept :rfc:`5958` ``OneAsymmetricKey`` (PKCS8 version 2).

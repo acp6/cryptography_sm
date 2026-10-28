@@ -862,4 +862,306 @@ also support providing integrity for associated data which is not encrypted.
             when the ciphertext has been changed, but will also occur when the
             key, nonce, or associated data are wrong.
 
+.. class:: SM4GCM(key)
+
+    .. versionadded:: 51.0.0
+
+    .. note::
+
+        This class only supports 128-bit tags. If you need tag truncation
+        (which is generally **not recommended**) you should use the
+        :class:`~cryptography.hazmat.primitives.ciphers.modes.GCM` class
+        with :class:`~cryptography.hazmat.primitives.ciphers.Cipher`.
+
+    The SM4-GCM construction is composed of the
+    :class:`~cryptography.hazmat.primitives.ciphers.algorithms.SM4` block
+    cipher (specified in :rfc:`8998`) utilizing Galois Counter Mode (GCM).
+
+    :param key: A 128-bit key. This **must** be kept secret.
+    :type key: :term:`bytes-like`
+
+    :raises cryptography.exceptions.UnsupportedAlgorithm: If the version of
+        OpenSSL does not support SM4-GCM.
+
+    .. doctest::
+
+        >>> import os
+        >>> from cryptography.hazmat.primitives.ciphers.aead import SM4GCM
+        >>> data = b"a secret message"
+        >>> aad = b"authenticated but unencrypted data"
+        >>> key = SM4GCM.generate_key()
+        >>> sm4gcm = SM4GCM(key)
+        >>> nonce = os.urandom(12)
+        >>> ct = sm4gcm.encrypt(nonce, data, aad)
+        >>> sm4gcm.decrypt(nonce, ct, aad)
+        b'a secret message'
+
+    .. classmethod:: generate_key()
+
+        Securely generates a random SM4-GCM key.
+
+        :returns bytes: The generated key.
+
+    .. method:: encrypt(nonce, data, associated_data)
+
+        .. warning::
+
+            Reuse of a ``nonce`` with a given ``key`` compromises the security
+            of any message with that ``nonce`` and ``key`` pair.
+
+        Encrypts and authenticates the ``data`` provided as well as
+        authenticating the ``associated_data``.  The output of this can be
+        passed directly to the ``decrypt`` method.
+
+        :param nonce: A value of between 8 and 128 bytes. NIST `recommends a
+            96-bit IV length`_ for best performance.
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to encrypt.
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data that should be
+            authenticated with the key, but is not encrypted. Can be ``None``.
+        :type associated_data: :term:`bytes-like`
+        :returns bytes: The ciphertext bytes with the 16 byte tag appended.
+        :raises OverflowError: If ``data`` or ``associated_data`` is larger
+            than 2\ :sup:`31` - 1 bytes.
+
+    .. method:: encrypt_into(nonce, data, associated_data, buf)
+
+        .. versionadded:: 51.0.0
+
+        .. warning::
+
+            Reuse of a ``nonce`` with a given ``key`` compromises the security
+            of any message with that ``nonce`` and ``key`` pair.
+
+        Encrypts and authenticates the ``data`` provided as well as
+        authenticating the ``associated_data``.  The output is written into
+        the ``buf`` parameter.
+
+        :param nonce: A value of between 8 and 128 bytes. NIST `recommends a
+            96-bit IV length`_ for best performance.
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to encrypt.
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data that should be
+            authenticated with the key, but is not encrypted. Can be ``None``.
+        :type associated_data: :term:`bytes-like`
+        :param buf: A writable :term:`bytes-like` object that must be exactly
+            ``len(data) + 16`` bytes. The ciphertext with the 16 byte tag
+            appended will be written to this buffer.
+        :returns int: The number of bytes written to the buffer (always
+            ``len(data) + 16``).
+        :raises ValueError: If the buffer is not the correct size, or if
+            ``buf`` overlaps ``data``.
+        :raises OverflowError: If ``data`` or ``associated_data`` is larger
+            than 2\ :sup:`31` - 1 bytes.
+
+    .. method:: decrypt(nonce, data, associated_data)
+
+        Decrypts the ``data`` and authenticates the ``associated_data``. If you
+        called encrypt with ``associated_data`` you must pass the same
+        ``associated_data`` in decrypt or the integrity check will fail.
+
+        :param nonce: A value of between 8 and 128 bytes. NIST `recommends a
+            96-bit IV length`_ for best performance.
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to decrypt (with tag appended).
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data to authenticate. Can be
+            ``None`` if none was passed during encryption.
+        :type associated_data: :term:`bytes-like`
+        :returns bytes: The original plaintext.
+        :raises cryptography.exceptions.InvalidTag: If the authentication tag
+            doesn't validate this exception will be raised. This will occur
+            when the ciphertext has been changed, but will also occur when the
+            key, nonce, or associated data are wrong.
+
+    .. method:: decrypt_into(nonce, data, associated_data, buf)
+
+        .. versionadded:: 51.0.0
+
+        Decrypts the ``data`` and authenticates the ``associated_data``. If you
+        called encrypt with ``associated_data`` you must pass the same
+        ``associated_data`` in decrypt or the integrity check will fail. The
+        output is written into the ``buf`` parameter.
+
+        :param nonce: A value of between 8 and 128 bytes. NIST `recommends a
+            96-bit IV length`_ for best performance.
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to decrypt (with tag appended).
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data to authenticate. Can be
+            ``None`` if none was passed during encryption.
+        :type associated_data: :term:`bytes-like`
+        :param buf: A writable :term:`bytes-like` object that must be exactly
+            ``len(data) - 16`` bytes. The plaintext will be written to this
+            buffer.
+        :returns int: The number of bytes written to the buffer (always
+            ``len(data) - 16``).
+        :raises ValueError: If the buffer is not the correct size, or if
+            ``buf`` overlaps ``data``.
+        :raises cryptography.exceptions.InvalidTag: If the authentication tag
+            doesn't validate this exception will be raised. This will occur
+            when the ciphertext has been changed, but will also occur when the
+            key, nonce, or associated data are wrong.
+
+.. class:: SM4CCM(key, tag_length=16)
+
+    .. versionadded:: 51.0.0
+
+    .. note::
+
+        SM4-CCM is provided largely for compatibility with existing protocols.
+        Due to its construction it is not as computationally efficient as
+        other AEAD ciphers.
+
+    The SM4-CCM construction is composed of the
+    :class:`~cryptography.hazmat.primitives.ciphers.algorithms.SM4` block
+    cipher (specified in :rfc:`8998`) utilizing Counter with CBC-MAC (CCM)
+    (specified in :rfc:`3610`).
+
+    :param key: A 128-bit key. This **must** be kept secret.
+    :type key: :term:`bytes-like`
+    :param int tag_length: The length of the authentication tag. This
+        defaults to 16 bytes and it is **strongly** recommended that you
+        do not make it shorter unless absolutely necessary. Valid tag
+        lengths are 4, 6, 8, 10, 12, 14, and 16.
+
+    :raises cryptography.exceptions.UnsupportedAlgorithm: If the version of
+        OpenSSL does not support SM4-CCM.
+
+    .. doctest::
+
+        >>> import os
+        >>> from cryptography.hazmat.primitives.ciphers.aead import SM4CCM
+        >>> data = b"a secret message"
+        >>> aad = b"authenticated but unencrypted data"
+        >>> key = SM4CCM.generate_key()
+        >>> sm4ccm = SM4CCM(key)
+        >>> nonce = os.urandom(13)
+        >>> ct = sm4ccm.encrypt(nonce, data, aad)
+        >>> sm4ccm.decrypt(nonce, ct, aad)
+        b'a secret message'
+
+    .. classmethod:: generate_key()
+
+        Securely generates a random SM4-GCM key.
+
+        :returns bytes: The generated key.
+
+    .. method:: encrypt(nonce, data, associated_data)
+
+        .. warning::
+
+            Reuse of a ``nonce`` with a given ``key`` compromises the security
+            of any message with that ``nonce`` and ``key`` pair.
+
+        Encrypts and authenticates the ``data`` provided as well as
+        authenticating the ``associated_data``.  The output of this can be
+        passed directly to the ``decrypt`` method.
+
+        :param nonce: A value of between 7 and 13 bytes. The maximum
+            length is determined by the length of the ciphertext you are
+            encrypting and must satisfy the condition:
+            ``len(data) < 2 ** (8 * (15 - len(nonce)))``
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to encrypt.
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data that should be
+            authenticated with the key, but is not encrypted. Can be ``None``.
+        :type associated_data: :term:`bytes-like`
+        :returns bytes: The ciphertext bytes with the tag appended.
+        :raises OverflowError: If ``data`` or ``associated_data`` is larger
+            than 2\ :sup:`31` - 1 bytes.
+
+    .. method:: encrypt_into(nonce, data, associated_data, buf)
+
+        .. versionadded:: 51.0.0
+
+        .. warning::
+
+            Reuse of a ``nonce`` with a given ``key`` compromises the security
+            of any message with that ``nonce`` and ``key`` pair.
+
+        Encrypts and authenticates the ``data`` provided as well as
+        authenticating the ``associated_data``.  The output is written into
+        the ``buf`` parameter.
+
+        :param nonce: A value of between 7 and 13 bytes. The maximum
+            length is determined by the length of the ciphertext you are
+            encrypting and must satisfy the condition:
+            ``len(data) < 2 ** (8 * (15 - len(nonce)))``
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to encrypt.
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data that should be
+            authenticated with the key, but is not encrypted. Can be ``None``.
+        :type associated_data: :term:`bytes-like`
+        :param buf: A writable :term:`bytes-like` buffer into which the
+            ciphertext and tag will be written.  This must be exactly
+            ``len(data) + tag_length`` bytes long.
+        :returns int: The number of bytes written to the buffer (this is
+            always ``len(data) + tag_length``).
+        :raises OverflowError: If ``data`` or ``associated_data`` is larger
+            than 2\ :sup:`31` - 1 bytes.
+        :raises ValueError: If ``buf`` is not the correct length, or if
+            ``buf`` overlaps ``data``.
+
+    .. method:: decrypt(nonce, data, associated_data)
+
+        Decrypts the ``data`` and authenticates the ``associated_data``. If you
+        called encrypt with ``associated_data`` you must pass the same
+        ``associated_data`` in decrypt or the integrity check will fail.
+
+        :param nonce: A value of between 7 and 13 bytes. This
+            is the same value used when you originally called encrypt.
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to decrypt (with tag appended).
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data to authenticate. Can be
+            ``None`` if none was passed during encryption.
+        :type associated_data: :term:`bytes-like`
+        :returns bytes: The original plaintext.
+        :raises cryptography.exceptions.InvalidTag: If the authentication tag
+            doesn't validate this exception will be raised. This will occur
+            when the ciphertext has been changed, but will also occur when the
+            key, nonce, or associated data are wrong.
+
+    .. method:: decrypt_into(nonce, data, associated_data, buf)
+
+        .. versionadded:: 51.0.0
+
+        Decrypts the ``data`` and authenticates the ``associated_data``. If you
+        called encrypt with ``associated_data`` you must pass the same
+        ``associated_data`` in decrypt or the integrity check will fail. The
+        output is written into the ``buf`` parameter.
+
+        :param nonce: A value of between 7 and 13 bytes. This
+            is the same value used when you originally called encrypt.
+            **NEVER REUSE A NONCE** with a key.
+        :type nonce: :term:`bytes-like`
+        :param data: The data to decrypt (with tag appended).
+        :type data: :term:`bytes-like`
+        :param associated_data: Additional data to authenticate. Can be
+            ``None`` if none was passed during encryption.
+        :type associated_data: :term:`bytes-like`
+        :param buf: A writable :term:`bytes-like` object that must be exactly
+            ``len(data) - tag_length`` bytes. The plaintext will be written to
+            this buffer.
+        :returns int: The number of bytes written to the buffer (always
+            ``len(data) - tag_length``).
+        :raises ValueError: If the buffer is not the correct size, or if
+            ``buf`` overlaps ``data``.
+        :raises cryptography.exceptions.InvalidTag: If the authentication tag
+            doesn't validate this exception will be raised. This will occur
+            when the ciphertext has been changed, but will also occur when the
+            key, nonce, or associated data are wrong.
+
 .. _`recommends a 96-bit IV length`: https://csrc.nist.gov/pubs/sp/800/38/d/final

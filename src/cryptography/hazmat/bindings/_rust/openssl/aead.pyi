@@ -187,3 +187,65 @@ class AESGCMSIV:
         associated_data: Buffer | None,
         buf: Buffer,
     ) -> int: ...
+
+class SM4CCM:
+    def __init__(self, key: Buffer, tag_length: int | None = None) -> None: ...
+    @staticmethod
+    def generate_key() -> bytes: ...
+    def encrypt(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+    ) -> bytes: ...
+    def decrypt(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+    ) -> bytes: ...
+    def encrypt_into(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+        buf: Buffer,
+    ) -> int: ...
+    def decrypt_into(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+        buf: Buffer,
+    ) -> int: ...
+
+class SM4GCM:
+    def __init__(self, key: Buffer) -> None: ...
+    @staticmethod
+    def generate_key() -> bytes: ...
+    def encrypt(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+    ) -> bytes: ...
+    def decrypt(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+    ) -> bytes: ...
+    def encrypt_into(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+        buf: Buffer,
+    ) -> int: ...
+    def decrypt_into(
+        self,
+        nonce: Buffer,
+        data: Buffer,
+        associated_data: Buffer | None,
+        buf: Buffer,
+    ) -> int: ...
